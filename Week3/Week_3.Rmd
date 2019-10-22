@@ -1,7 +1,7 @@
 ---
 title: 'Week 3: Logistic Regression & Linear Discriminant Analysis'
 author: "Tom Cook"
-date: "Nov, 7 2018"
+
 output:
   pdf_document: default
   html_document: default
