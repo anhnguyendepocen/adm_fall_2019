@@ -1,0 +1,679 @@
+---
+title: 'Week 2: K-Nearest Neighbor and Naive Bayes'
+author: "Tom Cook"
+date: "March 19, 2018"
+output:
+  html_document: default
+  word_document: default
+  pdf_document: default
+---
+
+# Getting Started  
+
+You will need to install the following packages for this week: *class*, *e1071*, *caret*, and *ROCR*. 
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+PATH="~/Documents/Rockhurst/adm/Week_2/"
+
+# convenience function to quickly install packages that are needed if not installed and then load those packages
+packages_to_be_loaded=c("class","e1071","caret","ROCR")
+
+lapply(packages_to_be_loaded,function(x){
+	if(x%in%installed.packages()[,1]==F){ install.packages(x)}
+	require(x,character.only = T)
+})
+```
+
+
+## Simple Classification Models
+
+Our task for this week is to examine two simple  classification models that predict categorical outcomes (yes/no): **k-nearest neighbor (kNN)** and **Naive Bayes**.
+
+kNN and Naive Bayes are **supervised** learning algorithms, meaning we have a target variable. 
+
+### k-Nearest Neighbor (kNN): A Lazy Classification Model
+
+kNN is called a non-parametric method because it does not assume any functional form between the target and predictor variables. As a result, kNN is also called a "lazy learner." Compare to linear regression models, kNN is much simpler. There are no regression coefficients to estimate.  
+
+The most simple kNN model is k=1, where the class of an observation of interest is predicted using the observation **closest** (i.e. most similarities) to it. The 1-nearest neighbor can be extended to k > 1 neighbors in the following way:  
+
+1. Find the nearest k neighbors to the record to be classified.  
+2. Use a majority decision rule to classify the record, where the record is classified as a member of the majority class of the k neighbors.  
+
+When comparing among neighbors, we need to use a distance function. The most common way to measure distance is **Euclidean distance**, or the shortest direct route. 
+
+![](https://www.packtpub.com/sites/default/files/Article-Images/B03905_01_04.png)
+
+![](http://web.stonehill.edu/compsci/cs211/assignments/assign14.jpg)
+
+
+
+#### How many neighbors (k)?
+
+When choosing the number of k, we need to consider the **bias-variance tradeoff**. A large k reduces the variance in our predictions but can cause bias because we risk ignoring important patterns.  
+
+#### kNN requires data transformation into a standard range. 
+
+Since we are using Euclidean distance, the following must be done before we can run kNN algorithm:  
+
+1. All categorical predictor variables (i.e. factors) must be turned into dummy variables (0/1).  
+2. All numeric variables must be normalized to be on a common scale. Common normalization approaches include minimum-maximum normalization and z-scale (mean zero) transformation.  
+3. Normalization for numeric variables must be done separately for the training and validation/test sets. The reason is due to the fact that the mean and standard deviation in the training set may be quite different from the validation/test sets. The same is true for the minimum and maximum values in the train and validation/test sets. 
+
+kNN performs well when there is a large enough training set and each class is characterized by multiple combinations of predictor values; however, kNN is a time consuming algorithm. Since no model is built during the "training" phase, we have to compute the distances between a validation and/or test record and all training records at the time of prediction!  
+
+Let's do a small example.  
+
+```{r knn_example}
+RidingMowers <- read.csv(file.path(PATH,"RidingMowers.csv"))
+```
+
+Last week we used runif() function to create a random sample and then split it into a train and validation set. We now introduce an alternative approach to partition a data frame using the caret package. We are using a 70-30 split (70% training; 30% validation).
+
+```{r knn_example_2}
+
+# Using the Caret Package
+set.seed(123)
+
+trainIndex <- createDataPartition(RidingMowers$Ownership, p = .7, 
+                                  list = FALSE, 
+                                  times = 1)# in practice you'd usually leave 'times' set to 1.
+
+RM.train <- RidingMowers[ trainIndex,]
+RM.valid  <- RidingMowers[-trainIndex,] # use minus sign here to select everything that was not in the training index as the (implicit) validation set
+
+RM.train
+```
+
+The next step is to normalize the Income and Lot.Size variables in the training set. If we leave these variables as they are now and then apply knn, we would run into a situation where the variables with larger ranges will dominate variables with smaller ranges. We need to transform these variables to ensure their ranges are comparable with the dummy variables. There are two *common* ways to normalizing variables.  
+
+### Min-Max Normalization 
+
+![](https://cdn-images-1.medium.com/max/800/0*GQifNArAb4PPGJ6n.jpg)
+
+```{r knn_example_3}
+RM.norms<-RM.train[,1:2] #pull out vars we want to normalize
+
+normalize<- function(x) #An R-function do carry out min-max normalization
+            {
+              return(
+             (x-min(x))/(max(x)-min(x)))
+            }
+
+RM.norms.mm<-as.data.frame(lapply(RM.norms, normalize)) #apply R function to vars of interest
+
+range(RM.norms$Income)#notice the range before min-max normalization
+hist(RM.norms$Income)
+range(RM.norms.mm$Income) #notice the range after min-max normalization
+hist(RM.norms.mm$Income)
+```
+
+### Z-score standardization
+
+A problem with min-max normalization is its tendency to squeeze large values to be at or near 1. We lose the ability to detect outliers. An alternative approach is z-score (or mean zero) normalization.
+
+
+![](https://s-media-cache-ak0.pinimg.com/originals/70/db/af/70dbaf3b130b15f952abadf8d6f10fbf.jpg)
+
+![](https://statistics.laerd.com/statistical-guides/img/Standard_Score_Calc.gif)
+
+```{r knn_example_4}
+RM.norms.z <- as.data.frame(scale(RM.norms)) #scale function does z-score standardization. #as.data.frame wraps around scale to produce a data frame.
+range(RM.norms.z$Income)
+hist(RM.norms.z$Income)
+```
+
+It is up to the analyst to choose a normalization method. We will use z-score normalization. 
+
+```{r knn_example_5}
+train.knn <- cbind(RM.norms.z, RM.train$Ownership)
+colnames(train.knn)[3] <- "Ownership" #rename to make it easier to read
+names(train.knn)
+summary(train.knn)
+```
+
+Here is a visualization of what we have done with the training set. 
+
+```{r knn_example_6}
+
+plot(train.knn$Lot_Size~train.knn$Income, data = train.knn, pch=ifelse(train.knn$Ownership=="Owner",1,3))
+text(train.knn$Income, train.knn$Lot_Size, rownames(train.knn), pos=4)
+legend("topright", c("owner", "non-owner"), pch=c(1,3))
+
+```
+
+Now onto making predictions for the validation set. Unfortunately, we have some more data prep work to do.  
+
+```{r knn_example_7}
+
+# using functions from library class
+#knn function in class is quite picky so be careful about separating out the target & predictors. 
+train.knn.predictors <- train.knn[,1:2] # scaled predictors in training set
+train.knn.target <- train.knn[,3] #target variable with owner and nonowner classes
+valid.knn.predictors <- scale(RM.valid[,1:2]) #now we scale the predictors in the validation set
+valid.knn.target <- RM.valid[,3] #target variable with owner and nonowner classes
+
+set.seed(123)
+preds <- knn(train=train.knn.predictors, test = valid.knn.predictors,
+             cl=train.knn.target, k=1, prob=TRUE) #notice that we are not including the owner/nonowner class information in the knn model! 
+
+print(preds)
+
+set.seed(123)
+preds <- knn(train=train.knn.predictors, test = valid.knn.predictors,
+             cl=train.knn.target, k=2, prob=TRUE) #another example 
+
+print(preds)
+```
+
+What did we actually do? Here's a visualization of the first observation to be classified in the validation set. The observation has an Income z-score of 0.25 and Lot Size z-score of 0.69. For k=1, the closest neighbor is a "owner." Hence, the observation is classified as "owner." For k=2, the two closest neighbors are owners as well! 
+
+What difference(s) do you observe for the next observation to be classified in the validation set? The income z-score is -0.02, and the lot size z-score is 0.37. 
+
+```{r knn_example_6b}
+valid.knn.predictors #view the scaled predictor values for validation set
+
+plot(train.knn$Lot_Size~train.knn$Income, data = train.knn, pch=ifelse(train.knn$Ownership=="Owner",1,3))
+text(train.knn$Income, train.knn$Lot_Size, rownames(train.knn), pos=4)
+points(0.25,0.69, pch="x", col="green")
+points(-0.02,0.37, pch = "x", col = "red")
+legend("topright", c("owner", "non-owner"), pch=c(1,3))
+
+```
+
+Can we assess the performance of each knn model? Yes, we need to utilize a confusion matrix. 
+
+![](https://newbiettn.github.io/images/confusion-matrix-noted.jpg)
+
+Here is a highly recommended tutorial on interpreting the confusion matrix: https://classeval.wordpress.com/introduction/basic-evaluation-measures/. 
+
+
+The caret package contains a function called confusionMatrix that should help us with this task. Notice that we specify the positive class in the code chunk below. The positive class is the class that we are trying to (correctly) predict. Examples of positive class would be owners of riding mowers, patients who have certain disease(s), customers who will purchase some particular product(s), etc.
+
+```{r knn_example_8}
+confusionMatrix(preds, valid.knn.target, positive="Owner")
+```
+
+```{r knn_example_9}
+true.positive <- 2
+true.negative <- 3
+false.positive <- 0
+false.negative <- 1
+total <- true.positive + true.negative + false.positive + false.negative
+
+accuracy.rate <- (true.positive + true.negative)/total
+sensitivity <- true.positive/(true.positive + false.negative) # sensitivity is also called Recall, true positive rate
+specificity <- true.negative/(true.negative + false.positive) # True Negative Rate
+precision <- true.positive/(true.positive + false.positive)
+
+print(accuracy.rate)
+print(sensitivity)
+print(specificity)
+print(precision)
+```
+
+If a company is trying to identify potential customers who would buy riding mowers, would the classifier above pass the test? Note the sensitivity rate! 
+
+
+#### Picking a k for kNN  
+
+How do we pick a k value? We try out different k's and examine the model performances in the validation set. Here is an example of examining all k's between 1 and 5.   
+
+```{r knn_example_10}
+performance.df <- data.frame(k=seq(1,5,1), accuracy=rep(0,5), sensitivity=rep(0,5), specificity=rep(0,5)) # make a list of 5 zeroes
+
+set.seed(123)
+for (i in 1:5){
+  
+  preds <- knn(train=train.knn.predictors, test = valid.knn.predictors,
+             cl=train.knn.target, k=i, prob=TRUE)
+  performance.df[i,2] <- confusionMatrix(preds, valid.knn.target, positive="Owner")$overall[1]
+  performance.df[i,3] <- confusionMatrix(preds, valid.knn.target, positive="Owner")$byClass[1]
+  performance.df[i,4] <- confusionMatrix(preds, valid.knn.target, positive="Owner")$byClass[2]
+  
+}
+
+print(performance.df)
+```
+
+k=5 seems like a VERY good model--perhaps too good? We should note that the metrics shown in the performance table are quite unstable. This is due to the fact that we have a very small training and validation sets. But for now, we will choose k=5. 
+
+#### ROC (Receiver Operating Characteristic) Curve  
+
+The ROC curve is an appealing way to visualize sensitivity versus specificity. A good classifier would "hug" the top-left corner, meaning it is good at identifying true positives. The ROC curve is drawn for different cutoff values on the level of majority used by the majority rule.   
+
+![](http://gim.unmc.edu/dxtests/roccomp.jpg)
+
+It is quite laborious to plot a ROC curve. The usefulness of ROC curve comes in when we want to compare performance of multiple classifiers at the same time. 
+
+```{r knn_example_11}
+set.seed(123)
+knn5.model <- knn(train=train.knn.predictors, test = valid.knn.predictors,
+             cl=train.knn.target, k=5, prob=TRUE) 
+
+
+prob <- attr(knn5.model, "prob") #take out the raw probabilities from model. These are the proportions of neighbors that voted for the class ultimately chosen by the model. We need to adjust these to get the proportion that voted for "Owner":
+
+msk.nonowners=which(valid.knn.target=='Nonowner')
+msk.true.predictions=which(knn5.model==valid.knn.target) # mask for which model predictions are correct
+msk.false.predictions=which(knn5.model!=valid.knn.target)
+msk.true.nonowner.to.flip=intersect(msk.nonowners,msk.true.predictions) # get predictions that are correct for "Nonowner"
+prob[msk.true.nonowner.to.flip]=1-prob[msk.true.nonowner.to.flip] # the entries for the items in prob identified by msk.true.nonowner.to.flip indicate how many neighbors voted that the target value should be "Nonowner", call these entries x. Then 1-x gives the proportion of neighbors that voted that the target value should be Owner
+
+msk.false.owners.to.flip=setdiff(msk.false.predictions,msk.nonowners) # this should be an empty list or integer(0)
+
+prob[msk.false.owners.to.flip]=1-prob[msk.false.owners.to.flip]  # the entries in prob that correspond to incorrect predictions of owners indicate the number of neighbors that voted for non-owner. call these entries x. then 1-x gives the proportion of neighbors that voted that the target value should be Owner
+
+# using functions from ROCR
+pred_knn <- prediction(prob, valid.knn.target) # generates predictions at various cutoff points (infinity, 1, .8,.6)
+perf_knn <- performance(pred_knn, "tpr", "fpr") # evaluates predictions using specified measure
+
+plot(perf_knn, colorize=TRUE, print.cutoffs.at=seq(0,1,by=0.1), text.adj=c(-0.2,1.7),
+     main = "ROC Curve for knn=5") # plots interpolated roc curve.
+abline(a=0,b=1,lwd=2,lty=2,col="gray")
+```
+
+We see from this that the cutoff point of .6 gets us the best true positive rate (sensitivity, or recall) and best (i.e. lowest) false positive rate (1-specificity). When the model can perfectly classify the data, then the ROC curve will take its ideal form (an upside down "L").
+
+
+#### Ummm...Aren't We Still Cheating?  
+
+Yes! We can't simply pick a kNN model based on its performance in predicting the validation set. We have, in effect, incorporate the validation set into our training set to find the right k! If we were doing this the **right** way, we need to incorporate in a test set as well.  
+
+Put differently, using the validation set we have tuned the model -- selecting $f*(x)=k*nn(x)$ where $k*$ is the number of nearest neighbors that yeilded the best performance on the validation set. The problem we have, however, is that, we made use of the validation performance to conduct this tuning. In doing this, we may have essentially overfit the model by tuning the hyper parameter to the ideosyncracies of the validation set. To get an accurate expectation of the out of sample performance, therefore, we need to assess model performance on an additional set of data that was held out (typically called the test set) from both training and hyper-parameter tuning (i.e. validation). 
+
+
+### Naive Bayes 
+
+Naive Bayes classifier uses probability theory to answer the question: "What is the propensity of belonging to the class of interest?" For each record we want to predict, we do the following:  
+
+1. Find all other records with the same predictor profile  
+2. Determine what classes the records belong to and which class is most prevalent.  
+3. Assign the prevalent class to the record of interest.   
+
+#### Probability refresher
+* Prior probability: $P(A)$ - probability of event A occuring
+* Joint probability: $P(A \cap B)= P(A,B)$ - the probability of events A **and** B both occuring
+* Conditional probability: $P(A \mid B)$ - probability of event A occuring given that event B has occurred.  Not necessarily the same as $P(B \mid A)$ which is the probability that B occurs given that A has occured.
+* Relationship between prior, joint, and conditional: 
+$P(A,B) = P(B \mid A)P(A) = P(A \mid B)P(B)$
+* Independence: A is independent of B if $P(A \mid B) = P(A)$ 
+
+
+Use these relationships to get Bayes' rule:
+$$ P(A \mid B) = \frac{P(B \mid A) \, P(A)}{P(B)} $$
+
+where  
+
+ * $P(A \mid B)$ = probability of instance B being in class A. This is what we are trying to compute  
+ 
+* $P(B \mid A)$ = probability of generating instance B given class A. We can imagine that being in class A causes you to have feature B with some probability  
+
+* $P(A)$ = probability of occurrence of class A. This is just how frequent the class A is in our data set  
+
+* $P(B)$ = probability of instance B occurring.  This will be the same for all classes so you may not need to use it  
+
+
+#### Another small example 
+
+We are making follow up customer calls and we get to a customer called "Drew".  There is no salutation noted and the "Sex" field in the database is blank.  How do we address "Drew"?  
+
+We know that we have two classes: 
+
+$c1$ = male, and $c2$ = female.
+
+Classifying "Drew" as male or female is equivalent to asking if it is **more probable**
+that "Drew" is male or female. That is:  which is greater $p(male | drew)$ or $p(female | drew)$. Are we calling Drew Carey or Drew Barrymore?
+
+$$ P(Male \mid Drew) = \frac{P(Drew \mid Male) \, P(Male)}{P(Drew)} $$
+
+compared to:
+
+$$ P(Female \mid Drew) = \frac{P(Drew \mid Female) \, P(Female)}{P(Drew)} $$
+Say these are the clean entries in our data:
+
+| **Name**    | **Sex**    |
+|---------|--------|
+| Drew    | Male   |
+| Claudia | Female |
+| Drew    | Female |
+| Drew    | Female |
+| Alberto | Male   |
+| Karin   | Female |
+| Nina    | Female |
+| Sergio  | Male   |
+
+
+$$p(male)=\frac{3}{8}$$
+
+$$p(drew)=\frac{3}{8}$$
+
+$$p(male | drew) = \frac {1/3 * 3/8}{3/8} = \frac{0.125}{3/8}=\frac{1}{3}$$
+
+$$p(female | drew) = \frac {2/5 * 5/8}{3/8} = \frac{0.250}{3/8}=\frac{2}{3}$$
+
+It is more likely that our customer is female so we should probably address "Drew" as "Ms." 
+
+What if we have more information?  How can we bring this information into our classifier?
+
+What if our data looked like this?
+
+
+| **Name**    | **Over 5ft7in **| **Eyes**  |**Hair** | **Sex**    |
+|---------|-------------|-------|-------|--------|
+| Drew    | No          | Blue  | Short | Male   |
+| Claudia | Yes         | Brown | Long  | Female |
+| Drew    | No          | Blue  | Long  | Female |
+| Drew    | No          | Blue  | Long  | Female |
+| Alberto | Yes         | Brown | Short | Male   |
+| Karin   | No          | Blue  | Long  | Female |
+| Nina    | Yes         | Brown | Short | Female |
+| Sergio  | Yes         | Blue  | Long  | Male   |
+
+
+
+What are the conditional probabilities of sex w.r.t. each new variable?
+
+$p(sex=x|over57=y)$:
+|x|y||
+| Sex    | Over 5f7in | P   |
+|--------|------|-----|
+| Male   | Yes  | 2/3 |
+| Male   | No   | 1/3 |
+| Female | Yes  | 2/5 |
+| Female | No   | 3/5 |
+
+
+| Sex    | Eyes | P   |
+|--------|------|-----|
+| Male   | Blue | 2/3 |
+| Male   | Brown | 1/3 |
+| Female | Blue | 2/5 |
+| Female | Brown| 3/5 |
+
+| Sex    | Hair | P   |
+|--------|------|-----|
+| Male   | Long | 1/3 |
+| Male   | Short| 2/3 |
+| Female | Long | 4/5 |
+| Female | Short| 1/5 |
+
+
+If we assume that each of the features are correlated with the target but not one another (i.e. that the features are independently distributed). Then we can compute the probability of sex conditional on all of the covariates through a simple process of multiplication:
+
+$$ p(Y=y|X)=p(Y=y|x_1)*p(Y=y|x_2)*p(Y=y|x_3)\ldots*p(Y=y|x_k)$$
+
+$$ p(Y=y|X) =\frac{p(Y=y) \prod p(x_i|Y=y) }{p(X)} \\ =  \frac{p(Y=y) \prod p(x_i|Y=y) }{\sum_{k} p(Y=k)*p(X|Y=k)} $$
+Where $X$ is an $n\times p$ matrix of  the $p$ features and $Y$ is the $1\times n$ target vector. 
+
+Note that the denominator of this equation will be the same regardless of what category we are calculating conditional probabilities for. Accordingly we can assert:
+
+$$ p(Y=y|X)\propto p(Y=y) \prod p(x_i|Y=y)  $$
+
+This means we can calculate a value $f_y(X)= p(Y=y) \prod p(x_i|Y=y)$  for every category $y\in K$ and their rank order will correspond to the rank order of $p(Y=y|X)$ for every category $y \in K$. This provides us with the basis for our classifier $C(X)$ as: 
+
+$$\text{argmax}_{y}\quad p(Y=y) \prod p(x_i|Y=y)$$
+
+Which will produce a class ($y\in K$) for every row of matrix $X$.
+
+
+As applied to this example, and the simple question of whether drew is a male or female:
+
+$$f_{male}( drew,long,tall,blue) = p(drew|male)*p(long|male) * p(tall|male) * p(blue|male)*p(male)$$
+$$p(male | drew) = {2/3 * 2/3 * 1/3*1/3 * 3/8} = .0185$$
+$$f_{female}( drew,long,tall,blue) = p(drew|female)*p(long|female) * p(tall|female) * p(blue|female)*p(female)$$
+$$f_{female}(drew) = {2/5 *3/5 *4/5 * 2/3 * 3/8} = .0480$$
+Note that $f_y(X)$ does not give us probabilities, only something proportional to probabilities, so the values produced by $f_y(X)$ will (probably) not sum to 1. 
+
+
+```{r drew_calc}
+library(e1071)
+
+#create dataframe - note that cust_data has 9 rows but sex only has 8.  The "unknown" Drew is the last row of the data frame.  
+
+names <- c("Drew","Claudia","Drew","Drew","Alberto","Karin","Nina","Sergio","Drew")
+over57 <-c("No","Yes","No","No","Yes","No","Yes","Yes","Yes")
+eyes <- c("Blue","Brown","Blue", "Blue","Brown","Blue","Brown","Blue","Blue")
+hair <- c("Short","Long","Long","Long","Short","Long","Short","Long","Long")
+sex <- c("Male","Female","Female","Female","Male","Female","Female","Male")
+names<-as.factor(names)
+over57 <-as.factor(over57)
+eyes<- as.factor(eyes)
+hair<-as.factor(hair)
+sex<- as.factor(sex)
+cust_data <-data.frame(names,over57,eyes,hair)
+cust_data
+
+#split data into known Drew's and our unknown Drew
+train <- cust_data[1:8,]
+test <- cust_data[9,]
+
+
+#train model
+drew_classifier <- naiveBayes(sex ~ ., data = train)
+drew_classifier
+
+# Our Drew is the last row - what's the verdict?
+predict(drew_classifier, test)
+```
+
+#### Pros and Cons
+
+Naive Bayes is easy to implement. It is also a parametric model, so we know the predictors that matter.     
+
+The "naive" comes from the fact that we assume independence between predictors. This is a rather strong assumption. Yet, even when this assumption is violated, Naive Bayes still has shown to work well. 
+
+## A More Realistic Case  
+
+In reality, we will be dealing with much larger data sets and we will want to predict outcomes for more than one case.  Let's see what happens with some "real" data. 
+
+
+### Step 1: Develop an understanding of the data mining project
+
+In 2015, Angus Deacon and Anne Case, economists from Princeton University, published a [startling study](http://www.nytimes.com/2015/11/03/health/death-rates-rising-for-middle-aged-white-americans-study-finds.html). Deacon and Case found that mortality rate for middle aged (45 to 54 years old) non-Hispanic whites with a high school education or lower increased between 1999 and 2014, even though the mortality rates for all other age and racial groups were declining. This trend was happening even as the mortality rates of middle aged whites in other developed countries were declining. Deacon and Case found that the causes of death among less educated middle aged white Americans include **suicide**, **alcohol**, and **drug overdose**. 
+
+Since the publication of the Deacon & Case study, public interest in the drug overdose epidemic has increased. Gina Kolata and Sarah Cohen (2016) of the *New York Times* analyzed 60 million death certificates between 1999 and 2014 and found that the mortality rates among American non-Hispanic whites across all age groups under 65 years old were either rising or flattening. Kolata and Cohen reported: 
+
+**In 2014, the overdose death rate for whites ages 25 to 34 was five times its level in 1999, and the rate for 35- to 44-year-old whites tripled during that period. The numbers cover both illegal and prescription drugs....Rising rates of overdose deaths and suicide appear to have erased the benefits from advances in medical treatment for most age groups of whites** [Kolata and Cohen 2016](http://www.nytimes.com/2016/01/17/science/drug-overdoses-propel-rise-in-mortality-rates-of-young-whites.html).
+
+Here is an interactive map of opiate-related deaths in the past 12 months: 
+
+[Map of US Opiate Overdose Death](https://plot.ly/~xhp4y8/27/)
+
+
+*Can we build a model to predict whether a medical professional is likely to be an opioid prescriber? Additionally, can we identify predictors that tell us if a medical professional is more likely to prescribe opioids?*
+
+### Step 2: Obtain the data to be used in the analysis 
+
+We will be working with a dataset posted on [Kaggle](https://www.kaggle.com/apryor6/us-opiate-prescriptions) by Alan Pryor Jr. The dataset includes non-opioid prescription records and demographic information of 25,000 licensed medical professionals. The prescriptions were written for individuals covered under Class D Medicare. The source of the data is from the [Center for Medicare and Medicaid Services] (https://www.cms.gov/).
+
+
+### Step 3: Explore & preprocess data  
+
+This is a data frame with 331 columns and 25,000 rows! We cannot rely on the View() function to look at our data frame. We need to utilize other EDA functions. 
+
+```{r setup2}
+prescribers<-read.csv(file.path(PATH,"prescribers.csv"))
+
+dim(prescribers)
+ 
+#names(prescribers)
+
+prescribers<-prescribers[,c(241,1:240,242:331)] #Rearranging the columns so that our target variable is first
+
+table(prescribers$Opioid.Prescriber)
+```
+
+The dataset contains the following information:
+
+*Gender of licensed medical professional
+
+*Number of prescriptions written for each of 239 common non-opiate drugs in 2014 by the licensed medical professional
+
+*A series of dummy variables for the state in which the medical professional practiced
+
+*A series of dummy variables for the medical professional's specialty
+
+*A factor variable named "Opioid.Prescriber" indicating whether the medical professional wrote at least 10 prescriptions for opioid drugs in 2014. This is our target variable. If the class = yes, then the medical professional is a frequent opioid prescriber. If the class = no, then the medical professional is NOT a frequent opioid prescriber.  
+
+There are 14,688 frequent opioid prescribers (or 58%) and 10,312 non-frequent opioid prescribers. 
+
+### Step #4: Reduce data dimension  
+
+This data set is a prime example of the need to reduce its dimension. We will return to this in Week #5. 
+
+### Step #5: Determine the data mining task  
+
+We want to build a model to predict licensed medical professionals who are frequent opioid prescribers. It is important to note here that we are defining a frequent opioid prescriber as a medical professional who prescribes opioids at least 10 times in a year.    
+
+### Step #6: Partition the data (for supervised learning)  
+
+We will use an 80-20 split. 
+
+```{r partition}
+
+set.seed(123)
+
+trainIndex <- createDataPartition(prescribers$Opioid.Prescriber, p = .8, 
+                                  list = FALSE, 
+                                  times = 1)
+
+prescribers_train <- prescribers[ trainIndex,]
+prescribers_valid  <- prescribers[-trainIndex,]
+```
+
+### Steps 7 & 8: Choose & implement the data mining techniques to be used  
+
+We will tackle the easy algorithm to deploy first--Naive Bayes. 
+```{r nb.opioid}
+
+prescribers_nb<- naiveBayes(Opioid.Prescriber ~ ., data = prescribers_train)
+
+#run this next line if you want to see all the calculated conditional probabilities.
+#prescribers_nb  
+```
+
+Now let's turn our attention to the kNN algorithm. We have some additional data preprocessing to do.    
+
+We have two factors: Gender and Opioid.Prescriber. We will leave the Opioid.Prescriber alone since this is our target variable. We need to change Gender into a dummy variable. 
+```{r recode}
+prescribers_train$Male <-ifelse(prescribers_train$Gender=="M",1,0) #if Male = 1; if Female=0.
+prescribers_train<-prescribers_train[,-2] #We do not need the Gender variable anymore so removing it.
+head(prescribers_train[,331]) #just checking our work to make sure the recoding worked.
+
+#have to do it for the validation set too!
+prescribers_valid$Male <-ifelse(prescribers_valid$Gender=="M",1,0) #if Male = 1; if Female=0.
+prescribers_valid<-prescribers_valid[,-2] #We do not need the Gender variable anymore so removing it.
+head(prescribers_valid[,331]) 
+```
+
+And now we have to consider transforming the non-dummy variables. Columns 2-240 are actual number of prescriptions written for each non-opioid drug. Let's see if we can use z-score transformation.  
+
+Here's a great example of why we need to consider z-score transformation. We have case(s) of 0 prescription written for ABILIFY in a year but also case(s) of 616 prescriptions written for the same drug in a year. 
+
+```{r rationale_z}
+min(prescribers_train$ABILIFY)
+max(prescribers_train$ABILIFY)
+```
+
+With a very large data set, it is computationally expensive to examine all possible k's. A good rule of thumb to find a starting point for k is the square root of the number of observations in the training set. It is advisable to not use an even k's value since it can result in a tie.   
+
+```{r knn.opioid}
+prescribers_train_predictors <- as.data.frame(scale(prescribers_train[,-1]))
+prescribers_train_target <- prescribers_train[,1]
+prescribers_valid_predictors <- as.data.frame(scale(prescribers_valid[,-1]))
+prescribers_valid_target <- prescribers_valid[,1]
+
+
+#performance.df <- data.frame(k=seq(1,20,1), accuracy=rep(0,20), sensitivity=rep(0,20), specificity=rep(0,20))
+
+#ideally we would do something like this
+#library(class)
+#for (i in 1:20)
+#  {
+#set.seed(123)
+#preds <- knn(train=prescribers_train_predictors, test = prescribers_valid_predictors,
+#             cl=prescribers_train_target, k=i, prob=TRUE)
+#performance.df[i,2] <- confusionMatrix(preds, prescribers_valid_target, positive="yes")$overall[1]
+#performance.df[i,3] <- confusionMatrix(preds, prescribers_valid_target, positive="yes")$byClass[1]
+#performance.df[i,4] <- confusionMatrix(preds, prescribers_valid_target, positive="yes")$byClass[2]
+#}
+
+#print(performance.df)
+
+
+#plot(performance.df$k, performance.df$accuracy, type="l", xlab="k", ylab="accuracy rate", main="k vs. accuracy")
+
+#plot(performance.df$k, performance.df$sensitivity, type="l", xlab="k", ylab="sensitivity rate", main="k vs. sensitivity")
+
+set.seed(123)
+
+
+preds_knn <- knn(train=prescribers_train_predictors, test = prescribers_valid_predictors,
+             cl=prescribers_train_target, k=141, prob=TRUE)
+
+```
+
+Since we have used the validation set to examine the performance of the knn=141 model, we will also use the validation set to examine the predictive performance of the Naive Bayes model.  
+
+```{r nb.preds}
+preds_nb <- predict(prescribers_nb, prescribers_valid)
+```
+
+### Step 9: Interpret the results 
+
+Let's compare the confusion matrix for the two models. 
+
+**Naive Bayes**
+
+```{r nb.cm}
+confusionMatrix(preds_nb, prescribers_valid_target, positive="yes")
+```
+
+**knn=141**
+
+```{r knn.cm}
+confusionMatrix(preds_knn, prescribers_valid_target, positive="yes")
+```
+
+And what about the ROC curve? 
+
+```{r roc.knn}
+prob.knn <- attr(preds_knn, "prob") #take out the raw probabilities from model. these are the proportions of neighbors that voted for the class ultimately chosen. 
+
+
+# Again, we need to fix the problem with knn's probabilities. Here is a shorter way to get this done (compared to the approach taken above):
+
+yes_level=which(levels(preds_knn)=='yes') # figure out what level corresponds to 'yes'
+prob.knn=apply(data.frame(x=as.numeric(preds_knn),y=prob.knn),1,function(j){
+	if(j['x']==yes_level){ # the second level in the factor corresponds to 
+		return(j['y'])
+		}else{
+		return(1-j['y'])}
+	})
+
+pred.knn <- prediction(prob.knn, prescribers_valid_target)
+perf.knn <- performance(pred.knn, "tpr", "fpr")
+plot(perf.knn, colorize=TRUE, print.cutoffs.at=seq(0,1,by=0.1), text.adj=c(-0.2,1.7),
+     main = "ROC Curve for knn=10")
+abline(a=0,b=1,lwd=2,lty=2,col="gray")
+```
+
+```{r roc.nb}
+
+prob.nb <- ifelse(preds_nb == "yes", 1, 0) # we have to hard code the predictions into 0-1
+pred.nb <- prediction(prob.nb, prescribers_valid_target)
+perf.nb <- performance(pred.nb, "tpr", "fpr")
+
+plot(perf.nb, colorize=TRUE, print.cutoffs.at=seq(0,1,by=0.1), text.adj=c(-0.2,1.7),
+     main = "ROC Curve for Naive Bayes")
+abline(a=0,b=1,lwd=2,lty=2,col="gray")
+```
+
+Neither model does a good job predicting opioid prescribers. 
+
+### Step 10: Deploy the model 
+We would not deploy the knn or Naive Bayes model at this point. We would go back "to the drawing board" and look at alternative data mining algorithms. 

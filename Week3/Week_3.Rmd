@@ -1,0 +1,552 @@
+---
+title: 'Week 3: Logistic Regression & Linear Discriminant Analysis'
+author: "Tom Cook"
+date: "Nov, 7 2018"
+output:
+  pdf_document: default
+  html_document: default
+  word_document: default
+---
+```{r setup}
+PATH="/Users/tom/Documents/Rockhurst/adm_2019_fall/Week_3"
+
+# convenience function to quickly install packages that are needed if not installed and then load those packages
+packages_to_be_loaded=c("caret","ROCR","matrixcalc","DiscriMiner","MASS","knitr")
+
+lapply(packages_to_be_loaded,function(x){
+	if(x%in%installed.packages()[,1]==F){ install.packages(x)}
+	require(x,character.only = T)
+})
+```
+# Getting Started  
+
+You will need to install the following packages for this week: *ROCR*, *MASS*, *caret*, *DiscriMiner*, *caret*, *knitr*, and *matrixcalc*. 
+
+## Simple Classification Models: A Redux
+
+In Week 2, we examined two simple classification models: knn and Naive Bayes. knn predicts the class of a new observation by examining the classes of observations in a **defined neighborhood**. The majority class observed in the neighborhood is used to classify the new observation. Naive Bayes is a "step up" from the knn model. Naive Bayes makes classification prediction as follows:  
+
+1. Estimate conditional probabilities for predictors occurring in each class. If we have two classes and two predictors, we would need to calculate the following conditional probabilities: P(x1|C1), P(x1|C2), P(x2|C1), and P(x2|C2).  
+2. Next, we multiple the conditional probabilities for the predictors by the overall prior probability for each class. For class C1, we calculate the predicted probability as follows: P(x1|C1) times P(x2|C1) times P(C1). For class C2, we would do the following: P(x1|C2) times P(x2|C2) times P(C2).  
+3. We predict the new observation belongs to the class, C1 or C2, that has the higher predicted probability.  
+
+Although Naive Bayes do account for predictors in making predictions, we had to assume that each predictor is independent of each other. This is where the "naive" in Naive Bayes comes from. We calculate the overall predicted probability of an observation belonging to a class by multiplying the conditional probabilities of the predictors together. We did not consider whether the predictors are correlated or not. We simply assumed they were independent.      
+
+## Two More Classification Models  
+
+In Week 3, we are going to introduce two more classification models that are less *naive*: logistic regression (LR) and linear discriminant analysis (LDA). Both models are suitable for small and large data sets. 
+### Logistic Regression (LR)  
+
+#### Why can't we just use linear regression?  
+
+Technically, we can recode a two-class prediction problem into a numeric dummy variable (0/1) and use this as our target variable. The model would look like this:  
+
+Y = B0 + B1X1 + B2X2 + ... + e  where p = 0 or 1  
+
+There are several problems with using such a model to make class prediction, however:  
+
+1. The predicted Y may not be 0 or 1. We can overcome such a problem by specifying a cutoff value of 0.5. If Y is greater than or equal to 0.5, we would classify it as the positive class (1). Otherwise, we classify it as a negative class (0). This "fix" is still not enough. We may still get predicted p values outside of the range of 0 and 1 entirely!  
+2. If Y can only be 0 and 1, the distribution of the error term (e) woul not follow a normal distribution.    
+
+3. The assumption that the variance of Y is constant (i.e. homskedasticity) would be violted.  
+
+The second and third problems are most relevant if we want to adhere to the assumptions of linear regression analysis. Since the goal of data mining is making prediction (and not explanatory like traditional statistics or the social sciences), we do not have to worry as much about #2 and #3. The first problem is still very real for data mining, so we need to use an alternative model like logistic regression.
+
+#### Logistic Response Function  
+
+Let $p$ be the probability of being in a class.  
+
+To ensure that p will be within the interval of [0,1], we take the following nonlinear transformation:  
+
+$$ p = \frac{1}{1+e^{-(B_0+B_1x_1+B_2x_2+...B_qx_q)}}$$
+$p$ is the probability of belonging to a positive class (1) versus the negative class (0). The problem with using $p$ to interpret model output is that each probability depends on specific values of the predictor variables.  We **cannot** say that the change in probability, $p$, for a unit increase in predictor variable $B_1$ (while holding all other predictors constant) is some value. We can only talk about probabilities in the context of specific records.  
+
+#### Odds
+
+To compare the probability of belonging to a positive class (1) versus a negative class (0), we use odds.  
+
+$$Odds(Y=1)=\frac{p}{1-p}$$
+
+We can rewrite the logistic response function as follows:  
+
+$$Odds(Y=1) = e^{B_0+B_1x_1+B_2x_2+...B_qx_q}$$
+With the model specified this way, we can interpret a unit increase in $x_1$ with an average increase of $B_1 * 100\%$ in the odds (holding all other predictors constant). 
+
+#### Standard Formulation of the Logistic Regression Model  
+
+To express the model above as a linear function, we can take the natural log of both sides of the equation to get:  
+
+$$log(odds)=log(e^{B_0+B_1x_1+B_2x_2+...B_qx_q})$$
+
+$$log(odds)=B_0+B_1x_1+B_2x_2+...B_qx_q$$
+
+The log(odds) is called the logit and can take values from negative infinity (very low odds) to positive infinity (very high odds). A logit of 0 corresponds to even odds of 1 (or probability = 0.5).  
+
+#### A Two Step Process  
+
+A prediction made using an LR model is a two step process: 
+
+1. Calculate estimates of the probabilities of belonging to a class.    
+2. Set a cutoff value for these probabilities to classify new observation into one of the known classes. The usual default cutoff value is 0.5 for a binary class prediction problem, but the analyst can adjust the cutoff value as needed.  
+
+We begin with the simple problem of identifying owners of riding mowers from Week 2.  
+
+```{r import.mowers}
+RidingMowers <- read.csv(file.path(PATH,"RidingMowers.csv"))
+
+head(RidingMowers)
+```
+
+Again, we split the data frame into a train and test set.  
+
+```{r LR1}
+
+"using caret"
+set.seed(123)
+
+trainIndex <- createDataPartition(RidingMowers$Ownership, p = .7, 
+                                  list = FALSE, 
+                                  times = 1)
+
+RM.train <- RidingMowers[ trainIndex,]
+RM.valid  <- RidingMowers[-trainIndex,]
+
+RM.train
+```
+
+
+```{r LR2}
+options(scipen=999)
+logit.reg <- glm(Ownership~., data=RM.train, family = "binomial")
+summary(logit.reg)
+```
+
+Here is the fitted logit model:  
+
+$$Logit(Ownership=Yes)=-22.452 + 0.092*Income + 0.853*Lot.Size$$
+We can interpret the regression coefficients as follows:  
+
+An increase of $1,000 in a customer's income increases the log odds of owning a riding mower by 0.09.  
+An increase of 1,000 square foot in a customer's lot size increases the log odds of owning a riding mower by 0.85.  
+
+But seriously...who talks in log odds? We need to take the extra step and report the results in odds.  
+
+```{r LR3}
+exp(cbind(Odds=coef(logit.reg)))
+```
+
+For every additional $1,000 increase in income, the odds that the customer owns a riding mower increases by 1.1.  
+For every additional 1,000 square foot increase in the customer's lot size, the odds that s/he owns a riding mower increases by 2.35. 
+
+```{r LR4}
+logit.reg.pred <- predict(logit.reg, RM.valid, type="response")
+logit.reg.pred
+```
+
+As you can see, the predictions are in probabilities. If we are using a cutoff value of 0.5, then the first four observations would be classified as "Yes" and the latter two would be classified as "No" for ownership of riding mowers. Below we recode the probabilities into class predictions.   
+
+```{r LR5}
+logit.reg.pred.cat <- ifelse(logit.reg.pred>=0.5, "Owner","Nonowner")
+logit.reg.pred.cat
+```
+
+Now let's examine the confusion matrix and the ROC Curve. What do you see?  
+
+```{r LR6}
+#confusionMatrix function is in caret package
+confusionMatrix(logit.reg.pred.cat, RM.valid$Ownership, positive="Owner")
+
+"using ROCR"
+pred_logit <- prediction(logit.reg.pred, RM.valid$Ownership)
+perf_logit <- performance(pred_logit, "tpr", "fpr")
+plot(perf_logit, colorize=TRUE, print.cutoffs.at=seq(0,1,by=0.1), text.adj=c(-0.2,1.7),
+     main = "ROC Curve for Logistic Regression Model")
+abline(a=0,b=1,lwd=2,lty=2,col="gray")
+```
+ 
+### Linear Discriminant Analysis (LDA)  
+
+Take a look at the scatter plot below. If I were to draw a line that would separate the owner from the nonowner groups, what is one possible line? Here is one such possible arbitrary line (in red).  
+```{r LDA1}
+plot(RM.train$Lot_Size~RM.train$Income, data = RM.train, pch=ifelse(RM.train$Ownership=="Owner",1,3))
+legend("topright", c("owner", "non-owner"), pch=c(1,3))
+segments(x0=85, x1=45,y0=10,y1=25, col = "red")
+```
+
+The red line is called a **linear discriminant** because it discriminates between the two classes--owners and nonowners. The purpose of LDA is to find such a linear discriminant that best separate the classes from each other. In particular, the linear discriminant function maximizes the mean between the classes while minimizing the variance within each class. In technical terminology, we are looking for a linear discriminant function that "maximize the ratio of **between-class variability** (maximizing the means between classes) to **within class-variability** (minimizing the variance within classes)." LDA wants observations in each class to be as homogenous as possible. At the same time, LDA wants each class to be as different as possible.  
+
+##### So how do we maximize between-class variability to within class-variability?  
+
+The answer lies in a technique where we project the data onto a lower dimensional space. In our example, we have a scatter plot representing a 2D space (i.e. a plane). The dimension that is lower than 2D is 1D, which is a line. We want to transform the plane into a line. The links below contain plots comparing the original scatterplot as a plane (2D) with the line projection (1D). 
+
+[Original Data](https://www.dropbox.com/s/lmth5j7f9or12av/scatter.jpeg?dl=0)  
+
+[Line Projection](https://www.dropbox.com/s/j33zimcp1va50zc/discr_scores.jpeg?dl=0)  
+
+
+The question "how is this done?" is quite complex. Fisher (1936) defined a classification score function as follows.  
+
+$$Z = B_1x_1 + B_2x_2+...+B_px_p$$
+He also defined the scoring function as: 
+
+$$S(B) = \frac{B^{T}mu_1-B^{T}mu_2}{B^{T}CB}$$
+Where, 
+
+$B^{T}$ is the column vector of the regression coefficients of the classification scoring function  
+$B$ is the row vector of the regression coefficients of the classification scoring function    
+$mu_1$ and $mu_2$ refer to the mean of class 1 and class 2     
+$C$ is the pooled covariance matrix (i.e. the covariance matrix of both classes)  
+
+The numerator of the scoring function is the between-class variability and the denominator is the within-class variability.  
+
+The above equation can be simplified to give us:  
+
+$$B = C^{-1}(mu_1 - mu_2)$$
+The pooled covariance matrix $C$ is calculated as follows:  
+
+$$C = \frac{1}{n_1+n_2}*(n_1C_1+n_2C_2)$$ 
+where C1 is the covariance matrix of class 1 and C2 is the covariance matrix of class 2  
+n1 and n2 are the number of observations in class 1 and 2, respectively.  
+
+The code chunks below show the tedious calculations for the Riding Mowers training set to calculate the regression coefficients of the classification function (Z). 
+
+##### Tedious Math Ahead
+
+We begin by separating out the predictor values for each class and calculating the "centroid" for each class.
+
+Note: Calculations below follow [this tutorial](http://chem-eng.utoronto.ca/~datamining/dmc/lda.htm).
+
+```{r LDA1.calc}
+#Step 1: separate out the predictor values for each class.
+owner <- subset(RM.train, Ownership=="Owner", select=c(Income, Lot_Size))
+nonowner <- subset(RM.train, Ownership=="Nonowner", select=c(Income, Lot_Size))
+
+#Step 2: Convert data frames in Step 1 to matrices
+owner.m <- as.matrix(owner)
+nonowner.m <- as.matrix(nonowner)
+
+# Step 3: Calculate the mean of each predictor for each class. m1 and m2 are called "centroids."
+
+m1 <- matrix(apply(owner.m,2,mean,na.rm=T),nrow=2)
+
+m2 <- matrix(apply(nonowner.m,2,mean,na.rm=T),nrow=2) 
+```
+
+What does each centroid look like?  
+
+```{r LDA.calc2}
+m1
+m2
+```
+
+Next, we calculate the covariance matrix for each class and adjust it for the number of observations in each class. After we do this, we can "pool" the two covariance matrices together to get matrix $C$.
+
+```{r LDA_calc_3}
+# we subtract 1 from the number of observations because we are, presumably working with a sample
+C1 <- 8 * cov(owner.m) #(n-1) * sum(X-mu1)
+C2 <- 8 * cov(nonowner.m) #(n-1)*sum(X-mu2)
+
+C1.C2 <- C1 + C2
+
+C <- (1/16)*(C1.C2) #(n-2)^-1 * C1+C2
+
+C
+```
+
+Next, we calculate the difference between the two centroids. 
+
+```{r LDA_calc_4}
+mdiff <- m1-m2
+mdiff
+```
+
+The last step is to multiply the above matrix by the inverse of the pooled covariance matrix (i.e. inverse of a matrix is the division in matrix algebra).  
+```{r LDA_calc_5}
+"using matrixcalc"
+beta <- matrix.inverse(C)%*%mdiff
+
+beta
+```
+
+Shmueli et al (2018) discussed the use of statistical (Mahalanobis) distance being used to find the classification function. The statistical distance is calculated below.  
+
+$$statistical.distance = B^{T}(mu_1 - mu_2)$$
+A statistical distance of 3 or greater indicate the calculated classification function does a good job of discriminating between the two classes. The two class centroids are three standard deviations away from each other. 
+
+```{r LDA_calc_6}
+statistical.distance <- t(beta) %*%mdiff
+
+statistical.distance
+```
+We have a pretty good classification function!  
+
+So how do we make a prediction with our classification function?  We "project" the new observation onto the classification function:  
+
+$$B^{T}\ (X - \frac{\mu_1 + \mu_2}{2}) > log[\frac{p(c1)}{p(c2)}]$$
+Where X is the new data record (as a vector)
+
+p(c1) is the probability of class 1 in the training set  
+
+p(c2) is the probability of class 2 in the training set
+
+```{r LDA_calc_7}
+m <- (m1+m2)/2
+m
+
+x <- matrix(c(64.8,21.6),nrow=2)
+x
+
+diff <- x-m
+diff
+
+t(beta) %*% diff
+```
+
+The projected "point" of an observation with Income=64.8 and Lot.Size=21.6 is 1.39. Now we compare that against the log of the ratio of probabilities for the two classes. Since we have 9 owners and 9 nonowners in the training set, the calculation is as follows:
+
+```{r LDA_calc_8}
+log(0.5/0.5)
+```
+
+Since the projected point is 1.39 and is greater than log(0.5/0.5)=0, we would classify this new observation as "owner". 
+
+Note: [further investigation](https://stats.stackexchange.com/questions/140465/different-coefficients-of-linear-discriminants-with-the-same-raw-data)  
+
+##### Back to Reality: Operationalizing the LDA model  
+
+```{r LDA2}
+"using DiscriMiner"
+lda.model <- linDA(RM.train[,1:2],RM.train$Ownership) #first two columns are predictors; last column is target  
+
+lda.model$functions #print classification functions
+lda.model$scores #print classification scores
+lda.model$classification #print assigned class
+```
+
+The output gives us two classification functions. Each function allows us to compute a classification score for each class.  
+
+$$classification.score.OWNER = -62.98 + 0.34Income + 4.85Lot.Size$$  
+$$classification.score.NONOWNER = -45.05 + 0.26*Income + 4.21Lot.Size$$
+While the DiscriMiner package does a nice job of calculating the classification functions, it does not handle making predictions very well. We have to use the MASS package for this purpose.  
+
+```{r LDA3}
+"using MASS"
+#first we train the model
+lda.model.MASS <- lda(Ownership~.,RM.train)
+lda.model.MASS # will show coefficients of linear discriminants for k-1 classes.
+
+lda.preds <- predict(lda.model.MASS,RM.valid)
+lda.preds$class #class prediction
+lda.preds$posterior #probability prediction
+```
+
+```{r LDA4}
+#confusionMatrix function is in caret package
+confusionMatrix(lda.preds$class, RM.valid$Ownership, positive="Owner")
+
+"using ROCR"
+#notice that we are asking to plot the second column for probability. The second column is for the owners class. 
+pred_lda <- prediction(lda.preds$posterior[,2], RM.valid$Ownership)
+perf_lda <- performance(pred_lda, "tpr", "fpr")
+plot(perf_lda, colorize=TRUE, print.cutoffs.at=seq(0,1,by=0.1), text.adj=c(-0.2,1.7),
+     main = "ROC Curve for Linear Discriminant Model")
+abline(a=0,b=1,lwd=2,lty=2,col="gray")
+```
+
+##### Why do we need LDA when we already have logistic regression?  
+
+1. LDA performs well when there is clear separation between classes. In fact, it does a better job than logistic regression!  
+2. LDA is suitable for small number of observations.  
+3. LDA is is suitable for classification problems with more than two classes.  
+
+#### The "Good" & "Bad" of Classification Models 
+
+| Model               | Good                      | Bad                                                        |
+|---------------------|---------------------------|------------------------------------------------------------|
+| knn                 | Easy to deploy            | Data transformation subjective k computationally expensive |
+| Naive Bayes         | Easy to deploy            | Need many records                                          |
+| Logistic Regression | Know important predictors | Not intuitive to explain Probability vs. odds              |
+| Linear Discriminant | Know important predictors | Sensitive to outliers Not easy to explain                  |
+
+Now that we have looked at a simple case, let's deploy LR and LDA on a larger data set. 
+
+## Classifying Opioid Prescribers Again!  
+
+Instead of going through the 10 steps of the data mining process like the past two weeks, I will only cover the relevant steps.  
+
+```{r EX1}
+prescribers<-read.csv(file.path(PATH,"prescribers.csv"))
+
+dim(prescribers)
+ 
+#names(prescribers)
+
+prescribers<-prescribers[,c(241,1:240,242:331)] #Rearranging the columns so that our target variable is first
+
+table(prescribers$Opioid.Prescriber) #view the distribution of opioid vs. non-opioid prescribers
+```
+
+We have two factors: Gender and Opioid.Prescriber. We will leave the Opioid.Prescriber alone since this is our target variable. We need to change Gender into a dummy variable. 
+
+```{r recode}
+#prescribers$Male <-ifelse(prescribers$Gender=="M",1,0) #if Male = 1; if Female=0.
+#prescribers<-prescribers[,-2] #We do not need the Gender variable anymore so removing it.
+#head(prescribers[,331]) #just checking our work to make sure the recoding worked.
+```
+
+### Step #6: Partition the data (for supervised learning)  
+
+We will use an 80-20 split. 
+
+```{r EX2}
+"using caret"
+set.seed(123)
+
+trainIndex <- createDataPartition(prescribers$Opioid.Prescriber, p = .8, 
+                                  list = FALSE, 
+                                  times = 1)
+
+prescribers_train <- prescribers[ trainIndex,]
+prescribers_valid  <- prescribers[-trainIndex,]
+```
+
+### Steps 7, 8 & 9: Choose & implement the data mining techniques to be used. Interpret the results.   
+
+Let's start with logistic regression. 
+
+```{r EX3} 
+logit.reg <- glm(Opioid.Prescriber~., data=prescribers_train, family="binomial")
+#print this line if you want to see the full fitted model 
+#summary(logit.model)
+logit.reg.pred <- predict(logit.reg, prescribers_valid, type="response")
+
+logit.reg.pred.cat <- ifelse(logit.reg.pred>=0.5,"yes","no")
+
+confusionMatrix(as.factor(logit.reg.pred.cat), prescribers_valid$Opioid.Prescriber, positive="yes")
+
+"using ROCR"
+pred_logit <- prediction(logit.reg.pred, prescribers_valid$Opioid.Prescriber)
+perf_logit <- performance(pred_logit, "tpr", "fpr")
+plot(perf_logit, colorize=TRUE, print.cutoffs.at=seq(0,1,by=0.1), text.adj=c(-0.2,1.7),
+     main = "ROC Curve for Logistic Regression Model")
+abline(a=0,b=1,lwd=2,lty=2,col="gray")
+```
+ 
+Now let's look at the LDA model.  
+
+If we want to see the classification functions, we can use DiscriMiner. 
+
+```{r EX4} 
+#"using DiscriMiner"
+#lda.model <- linDA(prescribers_train[,2:331],prescribers_train$Opioid.Prescriber) #predictors listed first and then target variable. 
+
+#print classification functions if you want to see them
+#lda.model$functions 
+```
+
+If we want to make predictions, we would use the MASS package.
+
+```{r EX5}
+"using MASS"
+#first we train the model
+lda.model.MASS <- lda(Opioid.Prescriber~.,prescribers_train)
+
+lda.preds <- predict(lda.model.MASS,prescribers_valid)
+
+#confusionMatrix function is in caret package
+confusionMatrix(lda.preds$class, prescribers_valid$Opioid.Prescriber, positive="yes")
+
+"using ROCR"
+#notice that we are asking to plot the second column for probability. The second column is for the owners class. 
+pred_lda <- prediction(lda.preds$posterior[,2], prescribers_valid$Opioid.Prescriber)
+perf_lda <- performance(pred_lda, "tpr", "fpr")
+plot(perf_lda, colorize=TRUE, print.cutoffs.at=seq(0,1,by=0.1), text.adj=c(-0.2,1.7),
+     main = "ROC Curve for Linear Discriminant Model")
+abline(a=0,b=1,lwd=2,lty=2,col="gray")
+```
+
+Let's summarize what we have learned from running knn, Naive Bayes, logistic regression, and LDA. 
+
+
+#### Kappa Statistic  
+
+$$ Kappa = \frac{Pr(a) - Pr(e)}{1-Pr(e)} $$
+Where, 
+
+Pr(a): proportion of actual agreement between the classifier and the true values  
+
+Pr(e): proportion of expected agreement between the classifier and the true values
+
+Kappa "adjusts accuracy by accounting for the possibility of a correct prediction by **chance alone.** Kappa values range to a maximum number of 1, which indicates perfect agreement between the model's predictions and the true values--a rare occurrence. Values less than one indicate imperfect agreement" (Lantz 2013, p. 303)  
+
+Let's see how we would calculate the kappa statistic for the logistic regression model.  
+
+
+|                   |Actual  |        |Marginal_Frequency    |
+|------------------:|-------:|-------:|---------------------:|
+|Prediction         |NO      |  YES   |                      |
+|NO                 |1673    |514     |2187                  |
+|YES                |389     |2423    |2812                  |
+|-------------------|--------|--------|----------------------|
+|Marginal_Frequency |2062    |2937    |                      |
+
+
+**Ground truth**: 2062 NO; 2937 YES  
+**LDA Model**: 2986 NO; 2013 YES 
+**TOTAL** = 5000
+
+```{r kappa_calc}
+Observed_Accuracy = (1673+2423)/5000 
+Expected_Accuracy_NO = (2187*2062)/5000
+Expected_Accuracy_YES = (2812*2937)/5000
+Expected_Accuracy_BOTH_CLASSES = (Expected_Accuracy_NO+Expected_Accuracy_YES)/5000
+Kappa_Statistic = (Observed_Accuracy-Expected_Accuracy_BOTH_CLASSES)/(1-Expected_Accuracy_BOTH_CLASSES)
+
+table<-cbind(Observed_Accuracy,Expected_Accuracy_NO,Expected_Accuracy_YES,Expected_Accuracy_BOTH_CLASSES, Kappa_Statistic)
+
+table_t<-t(table)
+
+colnames(table_t)<-c("value")
+
+
+"using knitr"
+kable(table_t)
+```
+
+#### What's a Good Kappa Value?
+
+There is no one answer. 
+
+Landis & Koch (1977):
+
+| Range      | Strength      |  
+|------------|---------------|
+| 0 - 0.2    | Poor          |
+| 0.21 - 0.4 | Fair          |
+| 0.41 - 0.6 | Moderate      |  
+| 0.61 - 0.8 | Substantial   |  
+| 0.81 - 1.0 | Almost perfect|
+
+
+Fleiss (1981):
+
+| Range      | Strength      |  
+|------------|---------------|
+| 0 - 0.4    | Poor          |
+| 0.41 - 0.75| Fair to Good  |
+| 0.75 - 1   | Excellent     |  
+
+
+Be careful! Kappa is not the best metric if accuracy is not what you are after. For more on kappa, here's a good [post](https://stats.stackexchange.com/questions/82162/cohens-kappa-in-plain-english). 
+
+#### All four models now!  
+
+Notice that the logistic regression & LDA models are doing a better job at predicting the "yes" cases compared to knn and Naive Bayes. 
+
+| Model               | Accuracy | Sensitivity | Specificity | Kappa  |
+|---------------------|----------|-------------|-------------|--------|
+| knn = 141           | 72.55%   | 74.33%      | 70.03%      | 0.4393 |
+| Naive Bayes         | 62.57%   | 40.99%      | 93.31%      | 0.3076 |
+| Logistic Regression | 81.94%   | 82.50%      | 81.13%      | 0.6306 |
+| Linear Discriminant | 77.78%   | 83.15%      | 70.13%      | 0.5374 |
+
