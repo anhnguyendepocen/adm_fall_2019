@@ -4,7 +4,7 @@ output: html_document
 ---
 
 ```{r}
-packages_to_be_loaded=c("corrplot","dummies","forecast","gains","reshape","mlr","leaps")
+packages_to_be_loaded=c("corrplot","dummies","forecast","gains","reshape","leaps")
 for(i in packages_to_be_loaded){
     if(i%in%installed.packages()[,1]==F){install.packages(i)}
     require(i,character.only=T)
@@ -243,42 +243,24 @@ The exhaustive search algorithm runs linear regression models on all possible su
 
 The drawback of exhaustive search is that it is time consuming to search through all the possible subsets.  
 
-```{r}
+```{r exhaustivesearch}
 # Functions from library leaps
-# does not work in mro-3.5.2
 search <- regsubsets(TOTAL.VALUE~.,data=train.search, nbest=1, nvmax=dim(train.search)[2], method="exhaustive")
 sum <- summary(search)
 sum$which
 sum$adjr2
+
 ```
 
-```{r}
-# instead of using leaps, we will use mlr -- this is only necessary to get this to work on azure. Moreover, i
-dummy_remodel=dummy("REMODEL",housing.index)
-housing.search=cbind(housing.index,dummy_remodel)
-housing.search=housing.search[,c(-13,-14)]
+Model #8 seems to be the model where the adjusted Rsquare does not improve much further. Here are the important predictors in Model #8: LOT.SQFT,GROSS.AREA, LIVING.AREA, FLOORS, FULL.BATH, HALF.BATH, FIREPLACE, and REMODELRecent. It is important to note that we are only including one dummy variable: REMODELRecent. Since there is no REMODELOld in this model, we are--in effect--comparing recently remodeled homes to a reference group of *never* and *old* remodeled homes. There is a difference in interpretation between Model #8 with the subsequent models shown for backward elimination, forward selection, and stepwise regression models below.  
 
-
-ctrl=makeFeatSelControlExhaustive(maxit = 1)
-rdesc=makeFixedHoldoutInstance(1:4641, 4642:5802, 5802)
-tsk=makeRegrTask(data = housing.search, target = "TOTAL.VALUE")
-sfeats = selectFeatures(learner='regr.lm',task=tsk,resampling=rdesc,control=ctrl,show.info = F)
-```
-
-```{r}
-summary(sfeats)
-```
-
-```{r}
-selected_vars=sfeats$x
-```
-
-The MLR based exhaustive subset regression chooses 11 variables: `LOT.SQFT`, `GROSS.AREA`, `LIVING.AREA`, `FLOORS`, `BEDROOMS`, `FULL.BATH`, `HALF.BATH`, `KITCHEN`, `FIREPLACE`, `REMODELOld`, and `REMODELRecent`. The basis for the selection is the mean squared error (MSE) calculated over the validation data. If you compare this result to the result that is obtained through leaps, you will notice some differences. These are due to differences in the criteria used to determine the best subset (the leaps code above uses in-sample adjusted R^2, and is likely to overfit -- more on this in the coming weeks). 
-
-```{r}
-housing.lm.exhaust <- lm(TOTAL.VALUE~. , data=train[,c(selected_vars,'TOTAL.VALUE')])
+```{r exhsearchmodel}
+housing.lm.exhaust <- lm(TOTAL.VALUE~LOT.SQFT + GROSS.AREA + LIVING.AREA + FLOORS + FULL.BATH + HALF.BATH + FIREPLACE + REMODELRecent, data=train)
 summary(housing.lm.exhaust)
+
 ```
+
+
 
 ### Backward Elimination Algorithm  
 
@@ -354,7 +336,11 @@ accuracy(pred_v, valid$TOTAL.VALUE)
 
 #### Wait...Aren't You Cheating?  
 
-Is it "cheating" if I use the RMSE (or any other error metric) to *go back* and choose an alternative model in Step #9? Yes! It's cheating (this is compounded in the case of exhaustive search because we are using the validation set to select the model in the first place). If you do choose to use the error metrics from the validation set to revise your model selection, you will need to use a third partition (i.e. the test set) to get true estimates of the error metrics.   
+Is it "cheating" if I use the RMSE (or any other error metric) to *go back* and choose an alternative model in Step #9? Yes! It's cheating. If you do choose to use the error metrics from the validation set to revise your model selection, you will need to use a third partition (i.e. the test set) to get true estimates of the error metrics.   
+
+
+**Important:** As we discuss the logic of cross validation and the train/test/validate partitioning scheme, you should consider using `mlr` or a similar package that will select subsets based on out of sample performance. 
+
 
 ### Lift Chart  
 
