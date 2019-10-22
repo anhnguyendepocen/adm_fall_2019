@@ -1,6 +1,9 @@
 ---
-title: An R Markdown document converted from "Week1.ipynb"
-output: html_document
+title: 'Week 1: Data Mining Process & Multiple Linear Regression'
+author: "Tom Cook"
+output:
+  pdf_document: default
+  html_document: default
 ---
 
 ```{r}
