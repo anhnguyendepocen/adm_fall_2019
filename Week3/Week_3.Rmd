@@ -8,7 +8,6 @@ output:
   word_document: default
 ---
 ```{r setup}
-PATH="/Users/tom/Documents/Rockhurst/adm_2019_fall/Week_3"
 
 # convenience function to quickly install packages that are needed if not installed and then load those packages
 packages_to_be_loaded=c("caret","ROCR","matrixcalc","DiscriMiner","MASS","knitr")
@@ -92,7 +91,7 @@ A prediction made using an LR model is a two step process:
 We begin with the simple problem of identifying owners of riding mowers from Week 2.  
 
 ```{r import.mowers}
-RidingMowers <- read.csv(file.path(PATH,"RidingMowers.csv"))
+RidingMowers <- read.csv("RidingMowers.csv")
 
 head(RidingMowers)
 ```
@@ -375,7 +374,7 @@ Now that we have looked at a simple case, let's deploy LR and LDA on a larger da
 Instead of going through the 10 steps of the data mining process like the past two weeks, I will only cover the relevant steps.  
 
 ```{r EX1}
-prescribers<-read.csv(file.path(PATH,"prescribers.csv"))
+prescribers<-read.csv("prescribers.csv")
 
 dim(prescribers)
  
