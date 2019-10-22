@@ -4,8 +4,7 @@ output: html_document
 ---
 
 ```{r}
-Sys.setenv(LD_PRELOAD="/usr/lib/x86_64-linux-gnu/libgfortran.so.3")
-packages_to_be_loaded=c("corrplot","dummies","forecast","gains","reshape","mlr")
+packages_to_be_loaded=c("corrplot","dummies","forecast","gains","reshape","mlr","leaps")
 for(i in packages_to_be_loaded){
     if(i%in%installed.packages()[,1]==F){install.packages(i)}
     require(i,character.only=T)
@@ -247,10 +246,10 @@ The drawback of exhaustive search is that it is time consuming to search through
 ```{r}
 # Functions from library leaps
 # does not work in mro-3.5.2
-# search <- regsubsets(TOTAL.VALUE~.,data=train.search, nbest=1, nvmax=dim(train.search)[2], method="exhaustive")
-# sum <- summary(search)
-# sum$which
-# sum$adjr2
+search <- regsubsets(TOTAL.VALUE~.,data=train.search, nbest=1, nvmax=dim(train.search)[2], method="exhaustive")
+sum <- summary(search)
+sum$which
+sum$adjr2
 ```
 
 ```{r}
