@@ -1,24 +1,15 @@
 ---
-title: 'Week 1: Data Mining Process & Multiple Linear Regression'
-author: "Tom Cook"
-date: "10-17-2018"
-output:
-  pdf_document: default
-  html_document: default
+title: An R Markdown document converted from "Week1.ipynb"
+output: html_document
 ---
 
-```{r setup, include=FALSE}
-knitr::opts_chunk$set(echo = TRUE)
-
-PATH="~/Documents/Rockhurst/adm/Week_1/"
-
-# convenience function to quickly install packages that are needed if not installed and then load those packages
-packages_to_be_loaded=c("corrplot","leaps","dummies","leaps","forecast","gains","reshape")
-
-lapply(packages_to_be_loaded,function(x){
-	if(x%in%installed.packages()[,1]==F){ install.packages(x)}
-	require(x,character.only = T)
-})
+```{r}
+Sys.setenv(LD_PRELOAD="/usr/lib/x86_64-linux-gnu/libgfortran.so.3")
+packages_to_be_loaded=c("corrplot","dummies","forecast","gains","reshape","mlr")
+for(i in packages_to_be_loaded){
+    if(i%in%installed.packages()[,1]==F){install.packages(i)}
+    require(i,character.only=T)
+}
 ```
 
 # Getting Started  
@@ -36,19 +27,24 @@ City of Boston provided total assessed value and 13 other variables for 5,000+ s
 
 ## Step 3: Explore, clean, and preprocess the data
 
-```{r import_data}
+```{r}
 #change the file path as needed
-housing.df <- read.csv(file.path(PATH,"WestRoxbury.csv"), header=TRUE) 
+housing.df <- read.csv("WestRoxbury.csv", header=TRUE) 
 ```
 
-```{r dimension}
+```{r}
 dim(housing.df)  # find the dimension of data frame
-head(housing.df)  # show the first six rows
-#View(housing.df)  # show all the data in a new tab
-names(housing.df)
 ```
 
-```{r subset}
+```{r}
+head(housing.df)  # show the first six rows
+```
+
+```{r}
+names(housing.df) # get names from housing data frame
+```
+
+```{r}
 # Practice showing different subsets of the data
 housing.df[1:10, 1]  # show the first 10 rows of the first column only
 housing.df[1:10, ]  # show the first 10 rows of each of the columns 
@@ -58,28 +54,60 @@ housing.df[5, 1:10]  # show the fifth row of the first 10 columns
 housing.df[5, c(1:2, 4, 8:10)]  # show the fifth row of some columns
 ```
 
-```{r summary}
+```{r}
 str(housing.df) #structure of data frame
+```
+
+```{r}
 summary(housing.df) #five number summary for numeric variables; count summary for factors
+```
+
+```{r}
 class(housing.df$REMODEL)
+```
+
+```{r}
 levels(housing.df$REMODEL)
+```
+
+```{r}
 summary(housing.df$BEDROOMS) #one missing value in row #2
 # housing.df$BEDROOMS[is.na(housing.df$BEDROOMS)]=median(housing.df$BEDROOMS,na.rm=TRUE)
+```
+
+```{r}
 summary(housing.df$TOTAL.VALUE) #one missing value in row #3
 # housing.df$TOTAL.VALUE[is.na(housing.df$TOTAL.VALUE)]=mean(housing.df$TOTAL.VALUE,na.rm = TRUE)
 ```
 
 What patterns do you see in the scatter plots below? 
 
-```{r plots}
+```{r}
+png(filename = "scatterplots1.png")
 plot(housing.df[,c(1,2,3,5)])
+dev.off()
+
+png(filename = "scatterplots2.png")
 plot(housing.df[,c(1,6,7,8)])
+dev.off()
+
+png(filename = "scatterplots3.png")
 plot(housing.df[,c(1,9,10,11,12,13,14)])
+dev.off()
+# plot(housing.df[,c(1,2,3,5)])
+# plot(housing.df[,c(1,6,7,8)])
+# plot(housing.df[,c(1,9,10,11,12,13,14)])
 ```
+
+![scatterplots1.png](scatterplots1.png)
+
+![scatterplots2.png](scatterplots2.png)
+
+![scatterplots3.png](scatterplots3.png)
 
 ### Correlation plot
 
-```{r corrplots}
+```{r}
 # using functions from library corrplot
 corrs <- cor(housing.df[,c(1:3,5:13)]) #did not include YR.BUILT and REMODEL
 corrs.matrix <- as.matrix(corrs)
@@ -89,7 +117,7 @@ corrplot(corrs.matrix, method="number")
 
 Notice that the correlation plots show "?" for the variables with NA's. We have to exclude the NAs if we want to calculate the correlation coefficients for all variables and not deal with the "?" output. 
 
-```{r corrplot2}
+```{r}
 housing.df.no.mv <- housing.df[c(-2,-3), ]#remove rows 2 & 3
 corrs2 <- cor(housing.df.no.mv[,c(1:3,5:13)]) #did not include YR.BUILT and REMODEL
 corrs2.matrix <- as.matrix(corrs2)
@@ -101,23 +129,34 @@ corrplot(corrs2.matrix, method="number")
 
 Two approaches: 1) delete the missing values but will lose these observations or 2) impute missing values with mean or median value. If the variable is normally distributed, use mean. If the distribution is skewed, use the median.  
 
-```{r impute}
+```{r}
 #housing.df <- housing.df[-2,] #remove row
 housing.df$BEDROOMS[is.na(housing.df$BEDROOMS)]=median(housing.df$BEDROOMS,na.rm=TRUE)
 housing.df$TOTAL.VALUE[is.na(housing.df$TOTAL.VALUE)]=mean(housing.df$TOTAL.VALUE,na.rm = TRUE)
-
 ```
 
-```{r pivot_table}
-
+```{r}
 hist(housing.df$BEDROOMS)
-boxplot(housing.df$BEDROOMS)
-hist(housing.df$TOTAL.VALUE)
-boxplot(housing.df$TOTAL.VALUE)
+```
 
+```{r}
+boxplot(housing.df$BEDROOMS)
+```
+
+```{r}
+hist(housing.df$TOTAL.VALUE)
+```
+
+```{r}
+boxplot(housing.df$TOTAL.VALUE)
+```
+
+```{r}
 #Using the aggregate function
 aggregate(housing.df$BEDROOMS, by=list(housing.df$FULL.BATH), FUN=mean, na.rm=TRUE)
+```
 
+```{r}
 #Using melt and cast to create a Pivot Table
 # using functions from library reshape
 summary(housing.df$ROOMS)
@@ -125,10 +164,9 @@ housing.df$ROOMS.bin <- .bincode(housing.df$ROOMS, c(2:14)) #create bins
 mlt <- melt(housing.df, id = c("ROOMS.bin", "REMODEL"), measure=c("TOTAL.VALUE","FLOORS"))
 cast(mlt, ROOMS.bin~REMODEL, subset= variable=="TOTAL.VALUE",
      median, na.rm=TRUE)
-
 ```
 
-##Step 4: Reduce the data dimension  
+## Step 4: Reduce the data dimension  
 
 We have 14 variables in total with only one categorical variable: REMODEL. The REMODEL variable has three categories: NONE, OLD, and RECENT. This is not too bad! If we were dealing with a large number of variables (think +40 variables) or a data set with many categorical variables (and many categories), we will need to determine whether some variables can be grouped together or remove to reduce the dimension of the data set. We will return to this topic in Week #5.  
 
@@ -136,7 +174,7 @@ We have 14 variables in total with only one categorical variable: REMODEL. The R
 
 We want to predict TOTAL.VALUE using the given predictor variables. Since we have a target variable, this is a supervised learning task. We will not use the TAX variable. TAX is determined by using the home value, which is what we are trying to predict. We will also remove ROOMS.bin, which is a variable we created earlier to make a Pivot Table.  
 
-```{r removevars}
+```{r}
 housing.df.model <- housing.df[,c(-2,-15)]
 ```
 
@@ -144,7 +182,8 @@ housing.df.model <- housing.df[,c(-2,-15)]
 
 We are using an 80-20 split, which is 80% of the data will be used to train our prediction model. The other 20% of the data will be used to "score" our prediction model. Note that we do not have a test set since we are not comparing multiple supervised models at the moment. 
 
-```{r datapartition}
+```{r}
+
 set.seed(123) #ensure we always get the same output 
 housing.index <- housing.df.model[order(runif(5802)), ]#randomized the observations
 train <- housing.index[1:4641, ] #create training set
@@ -160,7 +199,8 @@ We will be using multiple linear regression to build a prediction model.
 
 ## Step 8: Use algorithms to perform the task  
 
-```{r lm1}
+```{r}
+
 options(scipen = 999) #ensure no scientific notation is displayed
 housing.lm <- lm(TOTAL.VALUE~., data=train)
 summary(housing.lm)
@@ -185,7 +225,7 @@ summary(housing.lm)
 
 Before we can proceed, we have to create dummy variables for the REMODEL variable. (Remember that R's lm function does it automatically for us earlier.) In addition, we also have to remove one of the three newly created dummy variables: REMODELNone, REMODELOld, and REMODELRecent in order to run the exhaustive search algorithm. The reason is because linear regression models compare desired classes against a *reference* or *base* class. If we want to know the effect of recent remodelling on the total value of a home, we have to compare it against a reference/base class. The base class could be old remodeled home or never remodeled home. It does not matter which class, but we have to pick one. For this exercise, we will compare the *old* and *recent* remodeled homes against the base class of *never remodeled*. 
 
-```{r dummies}
+```{r}
 # using functions from library dummies
 train.dummies<-dummy("REMODEL", train)
 valid.dummies<-dummy("REMODEL", valid)
@@ -204,19 +244,40 @@ The exhaustive search algorithm runs linear regression models on all possible su
 
 The drawback of exhaustive search is that it is time consuming to search through all the possible subsets.  
 
-```{r exhaustivesearch}
+```{r}
 # Functions from library leaps
-search <- regsubsets(TOTAL.VALUE~.,data=train.search, nbest=1, nvmax=dim(train.search)[2], method="exhaustive")
-sum <- summary(search)
-sum$which
-sum$adjr2
-
+# does not work in mro-3.5.2
+# search <- regsubsets(TOTAL.VALUE~.,data=train.search, nbest=1, nvmax=dim(train.search)[2], method="exhaustive")
+# sum <- summary(search)
+# sum$which
+# sum$adjr2
 ```
 
-Model #8 seems to be the model where the adjusted Rsquare does not improve much further. Here are the important predictors in Model #8: LOT.SQFT,GROSS.AREA, LIVING.AREA, FLOORS, FULL.BATH, HALF.BATH, FIREPLACE, and REMODELRecent. It is important to note that we are only including one dummy variable: REMODELRecent. Since there is no REMODELOld in this model, we are--in effect--comparing recently remodeled homes to a reference group of *never* and *old* remodeled homes. There is a difference in interpretation between Model #8 with the subsequent models shown for backward elimination, forward selection, and stepwise regression models below.  
+```{r}
+# instead of using leaps, we will use mlr -- this is only necessary to get this to work on azure. Moreover, i
+dummy_remodel=dummy("REMODEL",housing.index)
+housing.search=cbind(housing.index,dummy_remodel)
+housing.search=housing.search[,c(-13,-14)]
 
-```{r exhsearchmodel}
-housing.lm.exhaust <- lm(TOTAL.VALUE~LOT.SQFT + GROSS.AREA + LIVING.AREA + FLOORS + FULL.BATH + HALF.BATH + FIREPLACE + REMODELRecent, data=train)
+
+ctrl=makeFeatSelControlExhaustive(maxit = 1)
+rdesc=makeFixedHoldoutInstance(1:4641, 4642:5802, 5802)
+tsk=makeRegrTask(data = housing.search, target = "TOTAL.VALUE")
+sfeats = selectFeatures(learner='regr.lm',task=tsk,resampling=rdesc,control=ctrl,show.info = F)
+```
+
+```{r}
+summary(sfeats)
+```
+
+```{r}
+selected_vars=sfeats$x
+```
+
+The MLR based exhaustive subset regression chooses 11 variables: `LOT.SQFT`, `GROSS.AREA`, `LIVING.AREA`, `FLOORS`, `BEDROOMS`, `FULL.BATH`, `HALF.BATH`, `KITCHEN`, `FIREPLACE`, `REMODELOld`, and `REMODELRecent`. The basis for the selection is the mean squared error (MSE) calculated over the validation data. If you compare this result to the result that is obtained through leaps, you will notice some differences. These are due to differences in the criteria used to determine the best subset (the leaps code above uses in-sample adjusted R^2, and is likely to overfit -- more on this in the coming weeks). 
+
+```{r}
+housing.lm.exhaust <- lm(TOTAL.VALUE~. , data=train[,c(selected_vars,'TOTAL.VALUE')])
 summary(housing.lm.exhaust)
 ```
 
@@ -229,7 +290,7 @@ Backward elimination is time consuming and unstable when you start with a large 
 
 Is there any difference than our earlier regression model? 
 
-```{r bwdreg}
+```{r}
 bwdreg <- step(housing.lm, direction="backward")
 summary(bwdreg)
 ```
@@ -240,7 +301,8 @@ The algorithm starts with no predictors and then add predictors one at a time. T
 
 The weakeness of this algorithm is that it will miss pairs of predictors that perform well together but poorly as single predictors. 
 
-```{r fwdreg}
+```{r}
+
 fwdreg <- step(housing.lm, direction="forward")
 summary(fwdreg)
 ```
@@ -251,7 +313,8 @@ The algorithm is a combination of forward selection and backward elimination alg
 
 Stepwise algorithm has the same weakenesses as forward selection and backward elimination algorithms. 
 
-```{r stepreg}
+```{r}
+
 stepreg <- step(housing.lm, direction="both")
 summary(stepreg)
 ```
@@ -262,7 +325,7 @@ The backward, forward, and stepwise selection algorithms did not include BEDROOM
 
 | Algorithm            | Excluded Predictor(s)                         | R-square |
 |----------------------|-----------------------------------------------|----------|
-| Exhaustive Search    | BEDROOMS; ROOMS; KITCHEN;YR_BUILT; REMODELOld | 81.2%    |
+| Exhaustive Search    | ROOMS;YR_BUILT | 81.2%    |
 | Backward Elimination | BEDROOMS                                      | 81.4%    |
 | Forward Selection    | BEDROOMS                                      | 81.4%    |
 | Stepwise             | BEDROOMS                                      | 81.4%    |
@@ -274,7 +337,8 @@ It is up to you to determine which model should be chosen to deploy. Is it worth
 
 What do the error metrics look like for the stepwise regression model? 
 
-```{r predict} 
+```{r}
+
 pred_v <- predict(stepreg, valid)
 # using functions from forecast
 accuracy(pred_v, valid$TOTAL.VALUE)
@@ -282,7 +346,8 @@ accuracy(pred_v, valid$TOTAL.VALUE)
 
 What about the exhaustive regression model? 
 
-```{r predict2}
+```{r}
+
 pred_v <- predict(housing.lm.exhaust, valid)
 # using functions from forecast
 accuracy(pred_v, valid$TOTAL.VALUE)
@@ -290,29 +355,37 @@ accuracy(pred_v, valid$TOTAL.VALUE)
 
 #### Wait...Aren't You Cheating?  
 
-Is it "cheating" if I use the RMSE (or any other error metric) to *go back* and choose an alternative model in Step #9? Yes! It's cheating. If you do choose to use the error metrics from the validation set to revise your model selection, you will need to use a third partition (i.e. the test set) to get true estimates of the error metrics.   
+Is it "cheating" if I use the RMSE (or any other error metric) to *go back* and choose an alternative model in Step #9? Yes! It's cheating (this is compounded in the case of exhaustive search because we are using the validation set to select the model in the first place). If you do choose to use the error metrics from the validation set to revise your model selection, you will need to use a third partition (i.e. the test set) to get true estimates of the error metrics.   
 
 ### Lift Chart  
 
 The *naive* estimate of a home's value is the mean. The mean value for a home in the validation set is $392. We can show the model's mean estimate for each decile (10%) group against the naive estimate. The decile groups are ranked from highest estimated values to lowest estimated values.   
 
-```{r lift}
+```{r}
 #using functions from gains
 gain.num <-gains(valid$TOTAL.VALUE, pred_v, groups=10)
+```
 
+```{r}
 plot(gain.num$depth,gain.num$mean.resp, xlab = "decile", ylab="Mean Response", main = "Decile vs. Mean Response", type = "l")
 abline(h=mean(valid$TOTAL.VALUE), col="red") #draw a horizontal line showing the naive estimate
+```
 
-
+```{r}
 barplot(gain.num$mean.resp/mean(valid$TOTAL.VALUE), names.arg=gain.num$depth, xlab="Decile", ylab="Mean Response",
 main="Decile-Wise Lift Chart")
+abline(h=1,col='red')
+```
 
+```{r}
 #print the lift values for decile groups
 gain.num$mean.resp/mean(valid$TOTAL.VALUE)
 ```
+
                                               
 How much better does our model do compare to the naive estimate? For the highest 10% of the estimates, our model's estimates would *potentially* allow us to gain 1.5 times the amount of revenue, compared to choosing 10% of the homes at random. 
 
-##References  
+## References  
 
 Shmueli, Galit and et al (2018). Data Mining for Business Analytics: Concepts, Techniques, and Applications in R. Hoboken: Wiley. Chapter 6. 
+
