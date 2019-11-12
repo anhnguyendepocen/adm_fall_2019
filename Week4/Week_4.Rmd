@@ -1,0 +1,786 @@
+---
+title: 'Week 4: Decision Trees & Cross Validation'
+author: "Tom Cook"
+date: "`r Sys.Date()`"
+output:
+  html_document: default
+  pdf_document: default
+  word_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+
+# convenience function to quickly install packages that are needed if not installed and then load those packages
+packages_to_be_loaded=c("caret","rpart","rpart.plot","forecast")
+
+lapply(packages_to_be_loaded,function(x){
+	if(x%in%installed.packages()[,1]==F){ install.packages(x)}
+	require(x,character.only = T)
+})
+```
+
+We have looked at four classification models in this course: 1) knn, 2) Naive Bayes, 3) logistic regression, and 4) linear discriminant analysis. We have also examined numeric prediction using multiple linear regression model. We will introduce trees models this week. Tree models are mostly employed for classification prediction, and, hence, are called **decision trees**. Yet, tree models are also flexible enough to be used on numeric predictions as well; these models are called **regression trees**. We will focus on decision trees for this discussion.  
+
+Furthermore, we will revisit the concept of model performance evaluation this week. You have been using a train/validation approach to gauge model performance. We will discuss alternative approaches to examining model performance with the purpose of minimizing the bias-variance tradeoff in the predicted errors.   
+
+# Getting Started
+
+The packages you will need for this week are **rpart**, **rpart.plot**, **forecast**, and **caret**.
+
+## A Simple Example: Will a Customer Buy a Computer?
+
+```{r cust_data}
+
+ages <- c("Under30","Under30","30to40","Over40","Over40","Over40","30to40","Under30","Under30", "Over40", "Under30","30to40","30to40", "Over40")
+income <-c("high","high","high","medium","low","low","low","medium","low", "medium", "medium", "medium","high","medium")
+student <- c("no","no","no", "no","yes","yes","yes","no","yes","yes","yes", "no","yes", "no")
+credit_rating <- c("fair","excellent","fair","fair","fair","excellent","excellent","fair","fair","fair","excellent","excellent","fair","excellent")
+buys_computer<- c("no","no","yes","yes","yes","no","yes","no","yes","yes","yes","yes","yes", "no")
+ages<-as.factor(ages)
+income <-as.factor(income)
+student<- as.factor(student)
+credit_rating<-as.factor(credit_rating)
+buys_computer<- as.factor(buys_computer)
+cust_data <-data.frame(ages,income,student,credit_rating,buys_computer)
+
+cust_data
+```
+
+
+## Recursive Partitioning  
+
+Decision trees are grown using a concept called *recursive partitioning**, or **top down, greedy, divide, and conquer approach**. Here is an overview of how recursive partitioning works:
+
+1. Choose the attribute that is most predictive of the target variable.  
+2. Observations in the training set are divided into groups of distinct values (i.e. categories). This form the first set of branches for the tree.  
+3. Continue to divide and conquer the nodes, choosing the attribute with the most prediction power each time until one of three conditions occur: a) all observations for a given node belong to the same class; b) no more remaining attriutes for further partitioning; or c) no observations are left to classify.  
+
+How do we determine the predictive power of an attribute at each splitting point? We can use a variety of heuristic or statistical measures. The most well-known decision tree algorithm is called **Classification and Regression Trees (CART)**, which is implemented in the **rpart** package in R. Hence, we will focus on the most popular statistical measures for selecting attributes in CART: **Information Gain (also called entropy measure)**, **Gain Ratio**, and **Gini Impurity Index**. 
+
+
+## Statistical Measures of Impurity   
+
+### Information Gain
+
+**Entropy Measure**
+
+$entropy(T) = - \sum_{k=1}^m p_k log2(p_k)$ 
+
+**Information Gain**
+$Gain(T,X) = Entropy(T) - Entropy(T, A)$
+
+**Entropy** is a probabilistic measure of uncertainty or ignorance and **information** is a measure of the reduction in uncertainy. The entropy value can be as high as 1, when we have equal number of observations among the classes in the target variable. The lowest entropy value is 0, which means we have explained all the uncertainty in the training set.  
+
+
+#### Now Let's See How We Can Use Information Gain to Pick the First Attribute to Create Our Decision Tree (i.e. Most Important Predictor)  
+
+In our training set, we have **9** customers who purchased a computer and **5** would did not. With no decision tree model, we calculate a total entropy of 0.94 for the target variable (purchase/not purchase a computer).
+
+```{r total.entropy}
+Ent_Buy<-((-9/14)*log2(9/14))-((5/14)*log2(5/14)) #entropy of the buy decision
+print(Ent_Buy)
+```
+
+#### What about Income as a Predictor?  
+
+We can calculate the entropy value of each class in the Income predictor variable.  
+
+```{r income.entropy}
+Ent_Income_High<-((-2/4)*log2(2/4))-((2/4)*log2(2/4))
+print(Ent_Income_High)
+Ent_Income_Medium<-((-4/6)*log2(4/6))-((2/6)*log2(2/6))
+print(Ent_Income_Medium)
+Ent_Income_Low<-((-3/4)*log2(3/4))-((1/4)*log2(1/4))
+print(Ent_Income_Low)
+```
+
+The next step is to weigh each entropy value by the number of observations belonging to each class. The total entropy in the Income variable is 0.911. 
+
+```{r income.entropy.2}
+Ent_IncomeBuy <- (4/14)*Ent_Income_High + (6/14)*Ent_Income_Medium + (4/14)*Ent_Income_Low
+print(Ent_IncomeBuy)
+```
+
+If we use Income as a splitting variable, how much information have we gained with this predictor? A measly 0.029 (or 2.9%)!
+
+```{r infogain.buy}
+
+InfoGain_Income = Ent_Buy - Ent_IncomeBuy #information gained.
+print(InfoGain_Income)
+```
+
+Should we look at the other predictors?
+
+
+#### What about Age? 
+
+```{r entropy.age}
+Ent_Age_Under30<-((-2/5)*log2(2/5))-((3/5)*log2(3/5))
+print(Ent_Age_Under30)
+Ent_Age_31_40<-((-4/4)*log2(4/4))
+print(Ent_Age_31_40)
+Ent_Age_Over40<-((-3/5)*log2(3/5))-((2/5)*log2(2/5))
+print(Ent_Age_Over40)
+Ent_AgeBuy <- (5/14)*Ent_Age_Under30 + (4/14)*Ent_Age_31_40 + (5/14)*Ent_Age_Over40
+print(Ent_AgeBuy)
+
+InfoGain_Age = Ent_Buy - Ent_AgeBuy #information gained.
+print(InfoGain_Age)
+```
+
+The total information gained if we use Age as a predictor is 0.247 or 24.7%. Not bad! Can we do better?
+
+#### What about being a Student?
+
+```{r entropy.student}
+
+Ent_Student_Yes<-((-6/7)*log2(6/7))-((1/7)*log2(1/7))
+print(Ent_Student_Yes)
+Ent_Student_No<-((-3/7)*log2(3/7))-((4/7)*log2(4/7))
+print(Ent_Student_No)
+Ent_StudentBuy <- (7/14)*Ent_Student_Yes + (7/14)*Ent_Student_No
+print(Ent_StudentBuy)
+
+InfoGain_Student = Ent_Buy - Ent_StudentBuy #information gained.
+print(InfoGain_Student)
+```
+
+The total information gained if we use Student status as a predictor is 0.152 or 15.2%. 
+
+#### What about Credit Rating Status?
+
+```{r entropy.credit}
+Ent_Credit_Excellent<-((-3/6)*log2(3/6))-((3/6)*log2(3/6))
+print(Ent_Credit_Excellent)
+Ent_Credit_Fair<-((-6/8)*log2(6/8))-((2/8)*log2(2/8))
+print(Ent_Credit_Fair)
+Ent_CreditBuy <- (6/14)*Ent_Credit_Excellent + (8/14)*Ent_Credit_Fair
+print(Ent_CreditBuy)
+
+InfoGain_Credit = Ent_Buy - Ent_CreditBuy #information gained.
+print(InfoGain_Credit)
+```
+
+The total information gained if we use Credit Rating status is 0.048 or 4.8%. 
+
+#### Implementing Recursive Partitioning
+
+Now that we have all the information gains calculated, recursive partitioning says that the most "predictive" predictor is used as the first split for the decision tree model. The predictors in the order of importance (and used to split the decision tree model) are Age, Student, Credit, and Income. 
+
+```{r infogain_all}
+print(InfoGain_Age)
+print(InfoGain_Student)
+print(InfoGain_Credit)
+print(InfoGain_Income)
+```
+
+#### Problems with the Information Gain Measure  
+
+Information gain is biased towards choosing attributes with a large number of classes. 
+
+### Gain Ratio  
+
+The **Gain Ratio** can be used as an alternative to Information Gain. Gain ratio takes the size of the decision tree (i.e. number of branches) into account when choosing an attribute. The information gain is scaled using **split information**. If the split information is higher then the partitions are more or less the same size. If the split information is low then a few partitions have most of the observations.  
+
+
+$SplitInfo(T,X) = - \sum_{k=1}^m \frac {p_k} k log2( \frac {p_k} k)$
+$Gain Ratio = Gain(X) / SplitInfo(X)$
+
+```{r splitinfo}
+Split_Info_Income <- -((4/14)*log2(4/14))-((6/14)*log2(4/14))-((4/14)*log2(4/14)) #4 low income; 6 medium; 4 high
+print(Split_Info_Income)
+Gain_Ratio_Income <- (InfoGain_Income)/Split_Info_Income
+```
+
+How does the Gain Ratio for Income compared against the Information Gain? Notice that Income has three classes, and the Gain Ratio scales the information gain downward to mitigate bias. 
+
+```{r compare}
+Gain_Ratio_Income
+InfoGain_Income
+```
+
+What about the other predictors?
+
+```{r splitinfo.others}
+Split_Info_Age <- -((5/14)*log2(5/14))-((4/14)*log2(4/14))-((5/14)*log2(5/14))
+print(Split_Info_Age)
+Gain_Ratio_Age <- (InfoGain_Age)/Split_Info_Age
+
+Split_Info_Student <- -((7/14)*log2(7/14))-((7/14)*log2(7/14))
+print(Split_Info_Student)
+Gain_Ratio_Student <- (InfoGain_Student)/Split_Info_Student
+
+Split_Info_Credit <- -((6/14)*log2(6/14))-((8/14)*log2(8/14))
+print(Split_Info_Credit)
+Gain_Ratio_Credit <- (InfoGain_Credit)/Split_Info_Credit
+```
+
+And now to compare Gain Ratio and Information Gain. Notice that Age is no longer the clear winner!
+
+```{r compare.gainratio.infogain}
+Gain_Ratio_Age
+InfoGain_Age #adjust downward because of three classes
+
+Gain_Ratio_Student
+InfoGain_Student #no difference
+
+Gain_Ratio_Credit
+InfoGain_Credit #no difference
+```
+
+#### Problem with Gain Ratio  
+
+Gain Ratio prefers unbalanced splits, where one group is much smaller than the other group(s).  
+
+### Gini Index
+
+**Gini index**
+
+$Gini(T) = 1 - \sum_{k=1}^m p_k^2$
+
+**Gini index** is a measure of impurity of the group of observations at each split. The highest Gini index depends on the number of classes in the target variable, and it can be calculated as $1- \frac 1 k$. The highest Gini index would occur if there are equal number of unclassified observations in all classes (k). The lowest Gini index is 0, which means all observations within each group belong to the same class. 
+
+*Please note that the **rpart** package uses the Gini Index as the default statistical measure for choosing predictors!*  
+
+#### Overall Gini Index for Target Variable (buy a computer).  
+
+```{r gini.buy}
+
+Gini_Buy<-1-((9/14)^2+(5/14)^2)
+print(Gini_Buy)
+```
+
+#### Gini Index of Income
+
+```{r gini.income}
+Gini_Income_High<-1-((2/4)^2+(2/4)^2)
+Gini_Income_Medium<-1-((4/6)^2+(2/6)^2)
+Gini_Income_Low<-1-((3/4)^2+(1/4)^2)
+
+print(Gini_Income_High)
+print(Gini_Income_Medium)
+print(Gini_Income_Low)
+```
+
+Now we have to weigh each Gini Index by the number of observations of each class in the target variable.  
+
+```{r gini.income.overall}
+Gini_Income <- (4/14)*Gini_Income_High + (6/14)*Gini_Income_Medium + (4/14)*Gini_Income_Low
+print(Gini_Income)
+```
+
+How much reduction in impurity if we use Income as a predictor? About 0.019.   
+
+```{r gini.income.reduction}
+Gini_BuyIncome <- Gini_Buy - Gini_Income
+print(Gini_BuyIncome)
+```
+
+
+#### What About Age?  
+
+A reduction in impurity of 0.116,
+
+```{r gini.age}
+Gini_Age_Under30<-1-((2/5)^2+(3/5)^2)
+Gini_Age_31_40<-1-((4/4)^2+(0/4)^2)
+Gini_Age_Over_40<-1-((3/5)^2+(2/5)^2)
+
+print(Gini_Age_Under30)
+print(Gini_Age_31_40)
+print(Gini_Age_Over_40)
+
+Gini_Age <- (5/14)*Gini_Age_Under30 + (4/14)*Gini_Age_31_40 + (5/14)*Gini_Age_Over_40
+print(Gini_Age)
+
+Gini_BuyAge <- Gini_Buy - Gini_Age
+print(Gini_BuyAge)
+```
+
+#### What about Being a Student?  
+
+A reduction in impurity of 0.092.
+
+```{r gini.student}
+Gini_Student_Yes<-1-((6/7)^2+(1/7)^2)
+Gini_Student_No<-1-((3/7)^2+(4/7)^2)
+
+print(Gini_Student_Yes)
+print(Gini_Student_No)
+
+Gini_Student <- (7/14)*Gini_Student_Yes + (7/14)*Gini_Student_No
+print(Gini_Student)
+
+Gini_BuyStudent <- Gini_Buy - Gini_Student
+print (Gini_BuyStudent)
+```
+
+#### What about Credit Rating?  
+
+A reduction in impurity of 0.429.
+
+```{r gini.credit}
+Gini_Credit_Excellent<-1-((3/6)^2+(3/6)^2)
+Gini_Credit_Fair<-1-((6/8)^2+(2/8)^2)
+
+print(Gini_Credit_Excellent)
+print(Gini_Credit_Fair)
+
+Gini_Credit <- (6/14)*Gini_Credit_Excellent + (8/14)*Gini_Credit_Fair
+print(Gini_Credit)
+
+Gini_BuyCredit <- Gini_Buy - Gini_Credit
+```
+
+#### Who's the Winning Predictor?  
+
+Predictors in the order of predictive power: Age, Student status, Credit Rating, and Income. 
+
+```{r gini.predictors}
+print(Gini_BuyAge)
+print(Gini_BuyStudent)
+print(Gini_BuyCredit)
+print(Gini_BuyIncome)
+```
+
+#### Problem with Gini Index  
+
+The Gini index is biased to multivalued attributes. The measure has difficulty when the number of classes is large. It also favors situations that result in equal-sized partitions and purity in both partitions.   
+
+## CART Implementation  
+
+So can we simplify all of the above calculations? Yes! We will use the Classification and Regression Tree (CART) implementation of decision tree models, which is in the **rpart** package.
+
+```{r cart.info}
+#library(rpart)
+#library(rpart.plot)
+set.seed(123)
+
+# 80% train; 20% test
+data_train <- cust_data[1:11,]
+data_test  <- cust_data[11:14,]
+prop.table(table(data_train$buys_computer))
+prop.table(table(data_test$buys_computer))
+
+data_rpart <- rpart(buys_computer ~ ., data=cust_data, method="class", 
+                    parms=list(split="information"), 
+                    control=rpart.control(minsplit = 1))
+
+prp(data_rpart, type=1, extra=1, split.font=1, varlen = -10)
+```
+
+## Interpreting the Decision Tree Model  
+
+Starting from the root node, we see that there are **9 customers who purchased a computer** and **5 customers who did not purchase a computer**. The dominant class is **yes purchased a computer**.  
+  
+First Split: *Is the customer Over40 or Under30?* If yes, go left. If no, go right. If you go right, notice that all 4 individuals purchased a computer. If you go left, you go to the next split.  
+
+Second Split: *Is the customer a student?* If yes, go left. If no, go right. Notice that at this second split, we have **10 customers we have not classified yet. 5 purchased a computer and 5 did not purchased a computer.**  
+  
+Can you interpret the rest of this decision tree?  
+
+### What about Using the Gini Index? 
+
+```{r cart.gini}
+data_rpart <- rpart(buys_computer ~ ., data=cust_data, method="class", 
+                    parms=list(split="gini"), 
+                    control=rpart.control(minsplit = 1))
+
+prp(data_rpart, type=1, extra=1, split.font=1, varlen = -10)
+```
+
+
+Unfortunately, there is no Gain Ratio implementation for rpart. 
+
+## Let's Talk About Overfitting  
+
+A problem with growing full tree models is that it is prone to **overfitting**. Overfitting occurs when we build a tree model that perfectly explains the training data but that's all it does! The model is so specific to the training data that it performs terribly when we use it to classify unknown cases (i.e. test data). The way to overcome overfitting is to **prune** the fully grown tree. 
+
+### Cost complexity  
+
+The cost complexity of a tree is composed of two parts: **Residual Sum of Squares** and **penalty factor for the size of the tree**. For a tree **T** that has **L(k)** terminal nodes, the cost complexity is written as:  
+
+$Cost.Complexity(k) = RSS(k) + \alpha L(k)$  
+
+Where RSS(K) = residual sum of squares of tree k (i.e. a measure of misclassification error)
+      $\alpha$ = penalty factor for a tree size ranging from 0 to 1. An $\alpha$ of 0 indicates a fully grown tree. An $\alpha$ of 1 indicates a tree with only the root node (no splits).  
+      
+rpart calculates a similar measure to the Cost Complexity called the **complexity parameter (CP)**.  
+
+$CP = \alpha/RRS_1$  
+
+Where RRS_1 = residual sum of squares at the root node (i.e. before any split).
+
+### rpart: Grow & Prune At the Same Time
+
+The default stopping point for splitting a decision tree in rpart is CP = 0.01. If rpart reaches this CP value, it will stop splitting the decision tree. If rpart does not reach this CP value, things are a bit more complicated.  
+
+      
+### What Happens If the Minimum CP Never Reaches 0.01?   
+
+rpart uses an iterative process to find the **Best Pruned Tree**. Here's how it works:  
+
+1. Partition the data into training and validation set. A training set includes observations that will be used to build the decision tree model. The validation set includes observations from the entire data set that will be used to "validate" the performance of a tree model.  
+2. Grow the tree with the training data.  
+3. Prune the tree successively, step by step, recording the complexity parameter (CP) at each tree size.     
+4. Fit each pruned tree to the validation set and record the pruned tree that has the lowest misclassification rate.  
+5. Repartition the data into training and validation set, redo Step #1 through #4 again. Calculate the average complexity parameters for all tree sizes.   
+6. Repeat Steps #1 to #5 until an optimum CP value is reached.  
+
+### A Note on Cross Validation Error and Its Standard Deviation
+
+```{r cpvalue}
+printcp(data_rpart)
+```
+
+In the CP table above, we want to "zoom into" the cross-validation error **(xerror)** column. The tree size that has the the smallest cross validation error has 0 split and corresponds to a CP value of 0.30. 
+
+To find this **Best Pruned Tree**, we need to look at the **estimated standard error of the cross validation error (xstd)**. When xerror = 1.0, we see that the xstd is 0.35857. We can find another tree that is **ONE xstd** from the full tree. So we have **calculated acceptable xerror= 1.0 + 0.37417 = 1.37417**. A tree with a xerror value that is closest to the calculated acceptable xerror (without going over) is the first tree (nsplit =0). Here is a visualization of the xerror + xstd. 
+
+```{r cp.xstd}
+cptable<-printcp(data_rpart)
+cptable
+plotcp(data_rpart, minline=TRUE, col="red") 
+```
+
+If we use the logic above, we see that the **Best Pruned Tree** is the first tree, which only include the root node! So while it is true that the stopping point in rpart is CP = 0.01, the algorithm also does another level of pruning using xerror + xstd.  
+
+(Note below that we have removed the rpart.control() option and letting rpart chooses the **Best Pruned Tree**.)
+
+```{r cart.bestpruned}
+data_rpart <- rpart(buys_computer ~ ., data=cust_data, method="class", 
+                    parms=list(split="gini"))
+
+prp(data_rpart, type=1, extra=1, split.font=1, varlen = -10)
+```
+
+You should not be alarmed when you see such an output! Take some time to print the cp value table. If you need to build a fuller tree, use the control() option in rpart. You should also get familiar with the rpart.control() help file.  
+
+```{r cart.controls}
+#?rpart.control
+```
+
+## Returning to Our Opioid Prescriber Classification Problem 
+
+### A reminder about the variables 
+
+Here is the breakdown of the 331 variables:
+
+Column 1: target variable; yes/no.  
+
+Column 331: dummy variable for male (i.e. gender). 
+
+Columns 241-291: state dummy variables. 
+
+Columns 292-330: medical speciality dummy variables. 
+
+Columns 2-240: number of prescriptions written for each non-opioid drug.
+
+
+
+### Step #6: Partition the data (for supervised learning)  
+
+We will use an 80-20 split.  
+
+```{r opioid.data.prep}
+prescribers<-read.csv("prescribers.csv")
+ 
+prescribers<-prescribers[,c(241,1:240,242:331)] #Rearranging the columns so that our target variable is first
+
+table(prescribers$Opioid.Prescriber) #view the distribution of opioid vs. non-opioid prescribers
+
+prescribers$Male <-ifelse(prescribers$Gender=="M",1,0) #if Male = 1; if Female=0.
+prescribers<-prescribers[,-2] #We do not need the Gender variable anymore so delete it.
+
+dim(prescribers)
+
+table(prescribers$Opioid.Prescriber)
+
+#library(caret)
+set.seed(123) #ensures we get the same train/valid set.
+
+trainIndex <- createDataPartition(prescribers$Opioid.Prescriber, p = .8, 
+                                  list = FALSE, 
+                                  times = 1)
+
+prescribers_train <- prescribers[ trainIndex,]
+prescribers_valid  <- prescribers[-trainIndex,]
+```
+
+
+### Steps 7, 8 & 9: Choose & implement the data mining techniques to be used. Interpret the results. 
+
+```{r cart.opioids}
+#library(rpart)
+
+set.seed(123)
+prescribers_rpart <- rpart(prescribers_train$Opioid.Prescriber~., method="class", parms = list(split="gini"), data=prescribers_train)
+
+prp(prescribers_rpart, type=1, extra=1, split.font=1, varlen = -10)
+```
+
+#### Maybe something a bit fancier?
+
+```{r cart.opioids.fancier}
+rpart.plot(prescribers_rpart, type=0, extra=101)
+```
+
+
+The leaves show the opioid vs. non-opioid prescribers after the split at that node.   
+
+The blue indicates the majority in that subgroup is not frequent opioid prescribers (negatives). The green indicates the majority in that subgroup is frequent opioid prescribers (positives).  
+
+The label (yes or no) at each node indicates the label of the majority subgroup (for being a frequent opioid prescriber).  
+
+
+#### Vignette on using rpart.plot()
+
+Check out this [vignette](http://www.milbo.org/rpart-plot/prp.pdf) on plotting rpart objects with rpart.plot(). A good resource for formatting your decision trees.
+
+
+#### Let's Look at the CP Table
+
+rpart stops  at 10 splits where cp = 0.01, which also corresponds to the best pruned tree. Remember that cp = 0.01 is the default stopping point.
+
+```{r cart.cptable}
+cptable<-printcp(prescribers_rpart)
+cptable
+plotcp(prescribers_rpart, minline=TRUE, col="red") 
+```
+
+
+#### Elbow Plot Method  
+
+In the above cp plot, you can see there is an "elbow." There exists another rule of thumb that says to look at tree size around the elbow. The idea is that beyond the "elbow", we are decreasing the xerror but not by much. We can build a simpler tree without sacrificing too much xerror.  
+
+How about a tree with 5 splits?
+
+```{r elbowmethod}
+set.seed(123)
+prescribers_rpart_elbow <- rpart(prescribers_train$Opioid.Prescriber~., method="class", parms = list(split="gini"), control=rpart.control(maxdepth=5), data=prescribers_train)
+
+rpart.plot(prescribers_rpart_elbow, type=0, extra=101)
+```
+
+#### Evaluating Model Performance
+
+Note below that positives are "yes" (i.e. frequent opioid prescribers) and negatives are "no" (not frequent opioid prescribers).
+
+#### Confusion Matrix
+
+```{r rpart caret}
+#first we make predictions using the chosen decision tree model. 
+rpart_pred <- predict(prescribers_rpart_elbow, prescribers_valid, type="class")
+#now we create a confusion matrix
+result.matrix <- confusionMatrix(rpart_pred, prescribers_valid$Opioid.Prescriber, positive="yes")
+print(result.matrix)
+```
+
+How does the decision tree model compare to the ones from Week #2 and #3?  
+
+| Model               | Accuracy | Sensitivity | Specificity | Kappa  |
+|---------------------|----------|-------------|-------------|--------|
+| knn = 141           | 72.55%   | 74.33%      | 70.03%      | 0.4393 |
+| Naive Bayes         | 62.57%   | 40.99%      | 93.31%      | 0.3076 |
+| Logistic Regression | 81.94%   | 82.50%      | 81.13%      | 0.6306 |
+| Linear Discriminant | 77.78%   | 83.15%      | 70.13%      | 0.5374 |
+| Decision Tree       | 75.84%   | 67.93%      | 87.01%      | 0.5246 |     
+
+## A Note on Regression Trees  
+
+While not as popular as classification trees, regression trees are also used. The difference between the two types is that the latter makes prediction for a continuous numeric target variable. The process of creating splits and pruning remains the same. There are two differences:   
+
+1. The only difference is that each leaf node gives the average value of the training records at that node. Remember that the leaf node of the classification tree gives the majority class of the training records.  
+
+2. Instead of using a confusion matrix to gauge model performance, we would use mean error (ME), mean absolute error (MAE), root mean square error (RMSE), mean percent error (MPE), mean absolute percent error (MAPE). Revisit Week 1 class markdown file to review error metrics for numeric predictions. 
+
+```{r regtrees}
+housing.df <- read.csv("WestRoxbury_clean.csv", header=TRUE) 
+names(housing.df)
+
+housing.df$TAX <- NULL #remove tax column
+
+#library(caret)
+trainIndex <- createDataPartition(housing.df$TOTAL.VALUE, p = .8, 
+                                  list = FALSE, 
+                                  times = 1)
+
+housing_train <- housing.df[ trainIndex,]
+housing_valid  <- housing.df[-trainIndex,]
+
+#library(rpart)
+#library(rpart.plot)
+data_rpart <- rpart(TOTAL.VALUE ~ ., data=housing_train, method="anova")
+prp(data_rpart, type=1, extra=1, split.font=1, varlen = -10)
+cptable<-printcp(data_rpart)
+cptable
+plotcp(data_rpart, minline=TRUE, col="red") #elbow plot? 
+
+pred_v <- predict(data_rpart, housing_valid)
+
+
+accuracy(pred_v, housing_valid$TOTAL.VALUE)
+```
+
+The RMSE of the stepwise regression from Week 1 was 42.58. The RMSE of the exhaustive search regression from Week 1 was 41.74. How does the regression tree compare?  
+
+
+## Cross Validation 
+
+### Revisiting Cross-Industry Standard Process for Data Mining (CRISP-DM)  
+
+You have seen the CRISP-DM cycle in the first week of class. Up to this point, you have "tested and evaluated" models by partitioning a data set into  training and validation sets. We will now examine other approaches to model testing and evaluation. 
+
+![CRISP-DM](http://1.bp.blogspot.com/-lYMQymum-3A/Ug4gBo-C4RI/AAAAAAAACyo/XF2LSI3uG08/s1600/Six-Step+CRISP-DM+Process.JPG)
+
+### Part 1: Performance Evaluation
+
+####What's the Expected Performance of a Model? 
+
+The best way to measure performance is to know the **true error rate**. The true error rate is calculated by comparing the model's predictions against actual outcomes in the **entire population**.  In reality, we usually are not working with the whole population. We are working with one or more samples from the population; hence, we do not know the true error rate. 
+
+#### Naive Approach 
+
+A **naive** way to estimate the true error rate is to apply our model to the entire sample (i.e. training dataset) and then calculate the error rate. The naive approach has several drawbacks:
+
+* Final model will overfit the training data. The problem is magnified when a model has a large number of parameters.  
+
+* Estimated error rate is likely to be lower than the true error rate.  
+
+A better approach than the naive method is **resampling**.   
+
+
+#### Resampling   
+
+Resampling refers to drawing repeated samples from the sample(s) we have. The goal of resampling is to gauge performances of competing models. *Resampling is our attempt to simulate the conditions needed to calculate the true error rate.*  
+
+Four major resampling methods:  
+
+1. one-fold cross validation  
+
+2. k-fold cross validation & repeated k-fold cross validation  
+
+3. leave-one-out cross validation  
+
+4. bootstrapping    
+
+
+##### One-Fold Cross Validation
+
+We touched on the validation set approach in the first two weeks of class. In particular, the validation set approach involves randomly dividing the known observations into two subgroups: a) a **training set** and b) a **test set**. We fit our model with the training set and then tests the model's performance on the test set. Common splits include 60-40 (60% training set and 40% test set), 70-30, and 80-20. In the discussion of decision trees above, we used an 80-20 one-fold cross validation for the opioid prescribers problem.
+
+
+In one fold cross validation, we have an estimated error rate that has high bias & variance. The way around the bias-variance tradeoff problem is by using **k-fold cross validation**. 
+
+![bias variance tradeoff](https://qph.ec.quoracdn.net/main-qimg-de907f5ea63c611c3e82c71dcc33295d)
+
+
+##### k-Fold Cross Validation
+
+k-fold cross validation is a resampling technique that divides the dataset into k groups, or folds, of equal size. Here is how it works:  
+
+1. Keep one fold as the validation set. Fit the model on the other k-1 folds.  
+
+2. Test fitted model on the validation set. Calculate the mean squared error (MSE) on the validation set. 
+
+3. Repeat Steps 1 & 2 over and over again so that a different fold is used as a validation set. **The true error rate is estimated as the average error rate of all repetitions.**  
+
+Use the **caret** package for this task.  
+
+We will divide the training set into 10-folds. Each fold will eventually be used as a validation set.
+
+```{r kfoldcv}
+#library(caret)
+fitControl <- trainControl(method="cv", number=10) #use fitControl to set options for k-fold cross validation
+
+set.seed(123)
+prescribers_10folds<-train(Opioid.Prescriber~., data=prescribers_train, method="rpart", metric="Accuracy", trControl=fitControl) #notice we use the train function in caret and pass rpart through it
+prescribers_10folds
+```
+
+We can also use the kappa statistic to train a model.  
+
+```{r kfoldcv.kappa}
+#fitControl <- trainControl(method="cv", number=10) #use fitControl to set options for k-fold cross validation
+
+#set.seed(123)
+#prescribers_10folds<-train(Opioid.Prescriber~., data=prescribers_train, method="rpart", metric="Kappa", trControl=fitControl) #notice we use the train function in caret and pass rpart through it
+#prescribers_10folds
+```
+
+Now we calculate the error rate of the chosen decision tree on the validation set. 
+
+```{r kfoldcv.rpart}
+actual <- prescribers_valid$Opioid.Prescriber
+predicted <- predict(prescribers_10folds, prescribers_valid, type="raw")
+results.matrix <- confusionMatrix(predicted, actual, positive="yes")
+print(results.matrix)
+```
+
+Notice that the accuracy rate of the decision tree model chosen through 10-fold cross validation is 72.7%. The decision tree model from a one-fold (80-20 split) cross validation earlier was 75.84%. 
+
+k-fold cross validation is still problematic, however. Vanwinckelen and Blockeel (2011) noted:  
+
+
+*In addition to bias, the results of a k-fold cross-validation also have high variance. If we run two different tenfold cross-validations for the same learners on the same data set S, but with different random partitioning of S into subsets S(i), these two cross-validations can give quite different results. An estimate with smaller variance can be obtained by repeating the cross-validation several times, with different partitionings, and taking the average of the results obtained during each cross-validation* (page 2).
+
+
+##### Repeated k-fold Cross Validation
+
+Repeated k-fold cross validation "repeats" the k-fold cross validation over and over again and stops at some prespecified number of times. 
+
+```{r repeatedkfoldcv}
+fitControl <- trainControl(method="repeatedcv", number=10, repeats=5) #10-fold cross validation #repeated 5 times.
+
+set.seed(123)
+prescribers_10folds_rp<-train(Opioid.Prescriber~., data=prescribers_train, method="rpart", metric="Accuracy", trControl=fitControl)
+prescribers_10folds_rp
+
+actual <- prescribers_valid$Opioid.Prescriber
+predicted <- predict(prescribers_10folds_rp, prescribers_valid, type="raw")
+results.matrix <- confusionMatrix(predicted, actual, positive="yes")
+print(results.matrix)
+```
+
+
+##### Leave-one-out Cross Validation (LOOCV)
+
+Repeated k-fold cross validation can help reduce the high variance problem, but we still have to deal with the high bias problem. A way to minimize the bias problem is to do LOOCV. The technique is a degenerate case of k-fold cross validation, where K is chosen as the total number of observations. LOOCV uses all observations as the training set and leaves one observation out as the test set. The process repeats until all observations have been used as a validation set.
+
+LOOCV is very computationally intensive!!
+
+```{r loocv}
+
+#fitControl <- trainControl(method="LOOCV") #10-fold cross validation
+
+#set.seed(123)
+#prescribers_loocv<-train(Opioid.Prescriber~., data=prescribers_train, method="rpart", metric="Accuracy", trControl=fitControl)
+#prescribers_loocv
+
+#actual <- prescribers_valid$Opioid.Prescriber
+#predicted <- predict(prescribers_loocv, prescribers_valid, type="raw")
+#results.matrix <- confusionMatrix(predicted, actual, positive="yes")
+#print(results.matrix)
+```
+
+##### Bootstrapping 
+
+Bootstrapping is a resampling technique that obtain distinct datasets by repeatedly sampling observations from the original dataset with replacement. 
+
+Each boostrapped dataset is created by sampling with replacement and is the same size as the original dataset. Consequently, some observations may appear more than once in a given boostrapped dataset while other observations may not appear at all.
+
+Note: The default method in the train() function in the caret package is the bootstrap.
+
+```{r bootstrap}
+cvCtrl <- trainControl(method="boot", number=10) #10 bootstrapped samples.
+set.seed(123)
+prescribers_bootstrap<-train(Opioid.Prescriber~., data=prescribers_train, method="rpart", metric="Accuracy", trControl=cvCtrl)
+prescribers_bootstrap
+
+actual <- prescribers_valid$Opioid.Prescriber
+predicted <- predict(prescribers_bootstrap, prescribers_valid, type="raw")
+results.matrix <- confusionMatrix(predicted, actual, positive="yes")
+print(results.matrix)
+```
