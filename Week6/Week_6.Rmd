@@ -1,0 +1,963 @@
+---
+title: 'Week 6: Cluster Analysis'
+author: "Tom Cook"
+output:
+  pdf_document: default
+  word_document: default
+  html_document: default
+---
+
+# Getting Started 
+
+The packages you will need to install for the week are **clusterSim**,  **cluster**, **fpc**, **klaR**, and **clusMixType**. 
+
+```{r packages}
+
+options(scipen = 999)
+
+knitr::opts_chunk$set(echo = TRUE)
+
+
+# convenience function to quickly install packages that are needed if not installed and then load those packages
+packages_to_be_loaded=c("dplyr" ,"clustMixType","klaR","fpc","clusterSim","cluster")
+
+lapply(packages_to_be_loaded,function(x){
+	if(x%in%installed.packages()[,1]==F){ install.packages(x)}
+	require(x,character.only = T)
+})
+```
+
+## Cluster Analysis
+
+In the previous weeks, we have looked at several supervised learning methods: knn, Naive Bayes, logistic regression, linear discriminant analysis, decision trees, and tree-based ensemble models. We are going to examine our first unsupervised learning method this week: clustering. Unsupervised learning is 'unsupervised' because we do not have a target (outcome variable). 
+
+
+Clustering is meant to be used for "knowledge discovery" instead of "prediction." The basis of clustering is what sociologists call "homophily"-or birds of the same feather flock together. The goal of clustering is to find groups, or clusters, in a data set. We want to partition our dataset so that observations within each group are similar to each other while observations in different groups are different from each other. 
+
+
+There are many clustering algorithms, which are based on many different approaches of grouping data points. We will split this week's discussion into two parts: 1) numeric data and 2) categorical and mixed data types.  
+
+## Clustering Numeric Data  
+
+We will discuss two approaches to clustering numeric data: 1) partitioning and 2) hierarchical. The partitioning approach divides the dataset into multiple partitions. The hierarchical approach disaggregates the dataset into a tree structure (similar to decision trees). 
+
+We will look at two partitioning methods: k-means and k-medoids. 
+
+### Business Problem 
+
+What interesting things can we learn from online postings of 30,000 teenagers on a social media site? (Notice that we have no target/outcome variable. We am simply looking for interesting patterns.) 
+
+We will use the Teen Market Segmentation dataset from Chapter 9 in Lantz (2013). According to Lantz, the dataset is a random sample of 30,000 U.S. high school students who had profiles on a social networking service (SNS) in 2006. The full text of the SNS profiles were downloaded. Each teen's gender, age, and number of SNS friends were recorded. From the top 500 words that appeared across all SNS profiles, a smaller list of 36 words were chosen to represent five categories of interest: extracurricular activities, fashion, religion, romance, and antisocial behavior (Lantz 2013, p. 279).
+
+
+```{r setup}
+
+teens<-read.csv("snsdata.csv", header=TRUE, sep=",")
+
+str(teens)
+```
+
+#### Exploratory Data Analysis
+
+```{r eda}
+summary(teens)
+```
+First, notice the ranges for the values for each variable.  Next, notice the number of missing values for some variables.
+
+
+#### Problematic Data Values
+
+```{r hist age}
+
+hist(teens$age)
+
+#fancier one 
+hist(teens$age, 
+     main="Age distribution", 
+     xlab="Teens", 
+     border="blue", 
+     col="green",
+     las=1)
+```
+
+The age variable has a very large range. Minimum age is 3.086. Maximum age is 106.927. There are also 5,086 missing values.
+
+Great Rblogger post on histograms: https://www.r-bloggers.com/how-to-make-a-histogram-with-basic-r/
+
+```{r plot gender}
+barplot(prop.table(table(teens$gender, useNA = "ifany")), names.arg=c("Female", "Male","Missing"))
+# why can't we use the hist command with gender?
+```
+
+The gender variable has 2,724 missing values. We should also note the gender distribution: 22,054 females and 5,222 males. 
+
+Let's see the percentage of missing values for our variables:
+
+```{r cleanup}
+#calculate the proportion of missing values
+pMiss <- function(x){sum(is.na(x))/length(x)*100} 
+apply(teens,2,pMiss)
+```
+
+Source: Code chunk above from [this](https://www.r-bloggers.com/imputing-missing-data-with-r-mice-package/) entry from Rblogger.
+
+
+16% of data values for age is missing. 9% of data values for gender is missing. If we compound the fact that some people did not report their true age, this variable is our "bigger" problem. Let's tackle it first.
+
+
+#### One Problem at a Time: Recoding Age via Imputation
+
+First, we need to make an assumption: **Teenagers are between the age of 13 and 20.**
+Anyone who does not have a reported age in this assumed range will be recoded as "NA."
+
+```{r recode}
+teens$age <- ifelse(teens$age >= 13 & teens$age < 20,
+                     teens$age, NA)
+```
+
+To handle the missing age values, we will use imputation. It is common to impute missing values with expected values (i.e. what we expect those values to be). Mean and median imputations are common techniques. If the distribution is normal, we use mean imputation. If the distribution is skewed, we use median imputation.
+
+We will draw a histogram of the age and then superimposes a normal curve on top for comparison purpose.  The density function doesn't like missing values so we'll drop the missing values for this picture.   
+
+```{r}
+hist(na.omit(teens$age), 
+     main="Age distribution", 
+     xlab="Teens", 
+     border="blue", 
+     col="green",
+     las=1,
+     prob = TRUE)
+lines(density(na.omit(teens$age)))
+```
+
+The distribution looks pretty normal. Let's proceed with mean imputation.
+
+```{r mean_by_age}
+# Finding the mean age by cohort
+mean(teens$age) # Doesn't work b/c of NA
+mean(teens$age, na.rm = TRUE) #This tells R to ignore NA in calculating the mean.
+
+# Review age by cohort
+aggregate(data = teens, age ~ gradyear, mean, na.rm = TRUE) 
+
+# Calculating the expected age for each person
+# This creates a new variable called ave_age
+ave_age <- ave(teens$age, teens$gradyear,
+                 FUN = function(x) mean(x, na.rm = TRUE)) 
+
+
+
+teens$age <- ifelse(is.na(teens$age), ave_age, teens$age) 
+#Removes the missing values and replaces with mean age.
+
+# Check to make sure missing values are eliminated
+summary(teens$age)
+
+```
+
+#### Second Problem: Missing Gender Values
+
+We have three possible levels: female, male, and NA (no reported gender). We will create two dummy variables to handle the gender missing values: 1) female and 2) no_gender.
+
+```{r missing_gender}
+teens$female <- ifelse(teens$gender == "F" &
+                         !is.na(teens$gender), 1, 0) 
+#If female & not missing gender value = 1
+#Else = 0 (this includes male & missing values)
+
+teens$no_gender <- ifelse(is.na(teens$gender), 1, 0) 
+#If gender is unknown then no_gender = 1. This is how we extract out the "missing values" versus "male" from the previous dummy variable.
+
+# Check our recoding work
+table(teens$gender, useNA = "ifany") #We have 2,724 cases of unknown gender.
+table(teens$female, useNA = "ifany") 
+table(teens$no_gender, useNA = "ifany") #We have 2,724 cases of unknown gender. This matches up with our count in the gender variable.
+```
+
+#### What Do We Want to Examine?
+
+We want to cluster what these 30,000 teenagers talked about on their SNS profiles with regards to the five categories of interests: extracurricular activities, fashion, religion, romance, and antisocial behavior. Let's just use their interests to form clusters. 
+
+```{r subset}
+interests <- teens[5:40] #Take the 5th through the 40th variables into the model.
+```
+
+#### Let's Talk Cluster Analysis
+
+[Visualizing K-Means](https://www.naftaliharris.com/blog/visualizing-k-means-clustering/)
+
+## Partitioning Approach
+
+General process:
+
+1. Choose the number of clusters (k)
+
+2. Partition the dataset into k clusters so that the sum of squared distances is minimized between the data points (p) and some center point [c(i)] in each cluster. 
+
+Two questions naturally arise from above:
+
+**Question 1**: How do we determine the center points?
+
+**Answer**: We select a clustering algorithm. We will examine k-means and k-medoids.
+
+**Question 2**: How do you measure the distance between the data points and center points?
+
+**Answer**: We use either Euclidean (straight line) or Manhattan distance (city block). 
+
+#### K-Means Clustering
+
+We will begin by building a cluster model with five clusters. There's no right place to start. Just pick a k value that you think is most suitable and start.
+
+Remember that in k-means, the starting centroids are randomly chosen.
+
+**nstart** is the number of times the starting points are re-sampled. Think of it this way: R does clustering assignment for each data point 25 times and picks the center that have the lowest within cluster variation. The "best" centroids become the starting point by which kmeans will continue to iterate. Typically you can set nstart to between 20 and 25 to find the best overall random start. See Morissette & Chartier (2013) [paper](http://www.tqmp.org/Content/vol09-1/p015/p015.pdf) for explanations of the different kmeans algorithms. I recommend reviewing Table 5 in the paper for additional information on the various kmeans algorithm.
+
+**iter.max** = maximum number of iterations before stopping (unless convergence is already achieved before max iterations).
+
+**The default algorithm is Hartigan-Wong, which minimizes the within-cluster sum of squares.**
+
+```{r k5_1}
+set.seed(123)
+teen_clusters_5 <- kmeans(interests, centers=5) 
+```
+
+Let's see what are the outputs from kmeans:
+
+```{r kmean_out}
+names(teen_clusters_5) 
+```
+
+Size: Number of people in each cluster. Cluster 3 has the most number of people. Follows by Clusters 5 & 1.
+
+```{r clustsize}
+teen_clusters_5$size
+```
+
+
+Let's see each row and its assigned cluster.
+
+```{r clust_assign}
+teen_clusters_5$cluster[1:100] #limit it to the first 100 observations otherwise it will print out all 30K!
+```
+
+Let's show the coordinates of the cluster centroids for the interest variables.
+
+```{r centroid5}
+teen_clusters_5$centers 
+t(teen_clusters_5$centers) #transpose for ease of reading purpose
+```
+
+#### Visualizing the Clusters
+
+```{r cluster_viz}
+
+
+
+clusplot(interests, teen_clusters_5$cluster, main = "k=5",color=TRUE, shade=TRUE, labels=0, lines=0) #creates visualization using principal components 
+
+plotcluster(interests, teen_clusters_5$cluster, main="k = 5") #creates a visualization using linear discriminants. Are there distinct groups?
+
+#If all your data ends up in a corner and hard to read- change the lim for y and x:
+#sometime you need to run it first with out the lims and then add them in and run again.
+plotcluster(interests, teen_clusters_5$cluster, main="k=5", xlim=c(-20,5), ylim=c(-20,10))
+```
+
+
+#### What about k=4?
+
+```{r k4}
+set.seed(123)
+teen_clusters_4 <- kmeans(interests, centers=4) 
+plotcluster(interests, teen_clusters_4$cluster, main="k=4") 
+```
+
+#### What about k=3?
+
+```{r k3}
+set.seed(123)
+teen_clusters_3 <- kmeans(interests, centers=3)
+plotcluster(interests, teen_clusters_3$cluster, main="k=3")
+```
+
+#### Picking Among the K's
+
+##### A Digression on Sum of Squares 
+
+###### Within Sum of Squares (withinss)
+
+We want our clusters to be "unique." In another word, we want the sum of squares within each cluster to be small because it means the cluster is cohesive. As we stated earlier, the default algorithm in kmeans is Hartigan & Wong, which minimizes the withinss. What are the withinss for each cluster? Look at Clusters 3, 5, and 1 in particular. Which cluster has the largest withinss?  
+
+```{r WSS}
+teen_clusters_5$withinss
+```
+
+###### Between Sum of Squares (betweenss)
+
+We want each cluster to be different from its neighboring clusters. The betweenss is the most useful when we want to compare among multiple kmeans models.
+
+```{r BSS}
+teen_clusters_5$betweenss
+```
+
+###### Total Sum of Squares (totss)
+
+totss = betweenss + withinss
+
+```{r TSS}
+teen_clusters_5$totss
+```
+
+##### Method 1: Use the visualizations 
+
+Look at your cluster plots. Can you make a determination this way? This method is not reliable once you go beyond two variables. Use with caution!
+
+##### Method 2: Examine the betweenss and withinss ratios!
+
+We want the clusters to demonstrate both cohesion and separation. Cohesion is measured by minimizing the ratio of withinss/totalss. Separation is measured by maximizing the ratio of betweenss/totalss.
+
+**Cluster Separation**
+
+```{r separation}
+clusters3<- teen_clusters_3$betweenss/teen_clusters_3$totss
+clusters4<- teen_clusters_4$betweenss/teen_clusters_4$totss
+clusters5<- teen_clusters_5$betweenss/teen_clusters_5$totss
+
+betweenss.metric <- c(clusters3, clusters4, clusters5)
+print(betweenss.metric) #Look for a ratio that is closer to 1.
+```
+k=5 has the most separation.
+
+
+**Cluster Cohesion**
+
+```{r cohesion}
+clusters3<- teen_clusters_3$tot.withinss/teen_clusters_3$totss
+clusters4<- teen_clusters_4$tot.withinss/teen_clusters_4$totss
+clusters5<- teen_clusters_5$tot.withinss/teen_clusters_5$totss
+
+totwithinss.metric <- c(clusters3, clusters4, clusters5)
+print(totwithinss.metric) #Looking for a ratio that is closer to 0. 
+
+```
+k=5 also has the most cluster cohesion.
+
+
+###### The Elbow Plot 
+```{r elbow}
+#WithinSS
+wss <- (nrow(interests)-1)*sum(apply(interests,2,var))
+for (i in 2:10) wss[i] <- sum(kmeans(interests,
+                                     centers=i)$withinss)
+plot(1:10, wss, type="b", xlab="Number of Clusters",
+     ylab="Within Sum of Squares", main = "Number of Clusters (k) versus Within Cluster SS")
+
+```
+
+Source: The above code chunk is from [here](http://stackoverflow.com/questions/15376075/cluster-analysis-in-r-determine-the-optimal-number-of-clusters)
+
+
+##### Method 3: Using pseudo-F statistic
+
+You should read https://github.com/cran/clusterSim/blob/master/inst/pdf/indexG1_details.pdf for **index.G1**.
+
+Pseudo F-statistic = (between-cluster-sum-of-squares / (c-1)) / (within-cluster-sum-of-squares / (n-c))  
+
+with c beeing the number of clusters and n beeing the number of observations.  
+
+We are looking for a relative high psuedo F statistic. This method is controversial, however.
+
+```{r pseudoF}
+# library(clusterSim)
+#?index.G1 #read the ../doc/indexG1_details.pdf
+
+a<-index.G1(interests, teen_clusters_3$cluster, centrotypes="centroids") 
+b<-index.G1(interests, teen_clusters_4$cluster, centrotypes = "centroids")
+c<-index.G1(interests, teen_clusters_5$cluster, centrotypes = "centroids")
+pseudoF<-c(a,b,c)
+pseudoF
+```
+
+##### Method 4: Use Your Business Knowledge!
+
+What is actionable? What is not? what do you know about your customers? Your data?
+
+##### A Side Note: Trying an Automatic Pick
+
+```{r autopick}
+library(fpc) #Requires this
+teen_clusters_optimal<-kmeansruns(interests, krange=2:10) #finds the "best"" K between 2 and 10
+teen_clusters_optimal$bestk 
+```
+
+
+##### Creating an Aggregate Profile for Our Clusters
+
+To create "meaning" for our clusters, we need to give each cluster an "identity."
+
+```{r profile}
+teen_clusters_5$size #Get the size of each cluster
+
+Clusters_5<-data.frame(teen_clusters_5$centers) #Put the cluster centroids into a data frame
+Clusters_5<-data.frame(t(teen_clusters_5$centers)) #Transpose for easier reading
+```
+
+We can sort the centroids for each cluster to see what the teens were writing on their profiles.
+
+```{r cluster_sort}
+Clusters_5[order(-Clusters_5$X1), ] 
+Clusters_5[order(-Clusters_5$X2), ]
+Clusters_5[order(-Clusters_5$X3), ]
+Clusters_5[order(-Clusters_5$X4), ]
+Clusters_5[order(-Clusters_5$X5), ]
+```
+
+**Cluster 1** (4,216 teens): music, band. Other words with smaller centroids: rock, god, dance, hair, shopping, cute, football, church.
+
+Are these the "band kids"?
+
+**Cluster 2** (1,538 teens): dance, god. Other words with smaller centroids: music, church, jesus, hair, shopping, cute, die, band.
+
+Are these the "religious/church" kids?
+
+**Cluster 3** (18,973 teens): All very low centroid values: music, god, shopping, dance, cute, football, hair, rock, mall, basketball
+
+Who are these "kids"? The "basket cases"?
+
+
+**Cluster 4** (773 teens): hair, sex, music, kissed, rock, blonde. Other words with smaller centroids: dance, die, cute, god
+
+Are these "princesses"?
+
+
+**Cluster 5** (4,500 teens): Moderate centroid values: hair, shopping, cute, soccer, basketball, mall, music, church, football, softball
+
+Who are these "kids"? Another "basket cases"?
+
+
+Let's add back the demographic information.
+
+```{r demographic}
+# apply the cluster IDs to the original data frame
+teens$cluster <- teen_clusters_5$cluster #adds the cluster number to each recond
+
+# mean age by cluster
+aggregate(data = teens, age ~ cluster, mean)
+
+# proportion of females by cluster
+aggregate(data = teens, female ~ cluster, mean)
+
+# mean number of friends by cluster
+aggregate(data = teens, friends ~ cluster, mean)
+
+```
+
+### K-Medoid Clustering
+
+The problem with k-means is that it is sensitive to outliers. A workaround to this issue is k-medoids clustering. Instead of finding centroids, we find medoids. What is a medoid? Medoid is just basically the most "central" data point in a cluster. Instead of finding the mean point in a cluster, we just choose one of the existing data points in each cluster to make it the "center." 
+
+K-Medoid does not work well on large datasets so we'll use a smaller dataset. First, we need to do some data clearning. 
+
+```{r cereals}
+cereals <- read.csv(file.path(PATH,"cereal.csv"))
+
+cereals$mfr <- recode_factor(cereals$mfr, 'A' = "American_Home_Food_Products", 'G' = "General_Mills", 'K' = "Kelloggs", 'N' = "Nabisco", 'P' = "Post", 'Q' = "Quaker_Oats", 'R' = "Ralston_Purina")
+cereals$type <- recode_factor(cereals$type, 'C' = "Cold", 'H' = "Hot")
+cereals$vitamins <- recode_factor(cereals$vitamins, '0' = "0", '25' = "25", '100' = "100")
+cereals$shelf <- recode_factor(cereals$shelf, '1' = "Lowest", '2' = "Middle", '3' = "Highest")
+```
+
+| Variable.Name | Description                                                                                                                               |
+|---------------|--------------------------|
+| mfr           | Manufacturer of cereal   |
+| type          | C= cold; H=hot           |                                                                    
+| calories      | Calories per serving                                                                                                                      |
+| protein       | Grams of protein                                                                                                                          |
+| fat           | Grams of fat                                                                                                                              |
+| sodium        | Milligrams of sodium                                                                                                                      |
+| fiber         | Grams of dietary fiber                                                                                                                    |
+| carbo         | Grams of complex carbohydrates                                                                                                            |
+| sugars        | Grams of sugars                                                                                                                           |
+| potass        | Milligrams of potassium                                                                                                                   |
+| vitamins      | Vitamins and minerals; 0, 25, or 100 indicating the typical percentage of FDA recommended intake                                          |
+| shelf         | Display shelf; 1, 2, or 3 counting from the floor                                                                                         |
+| weight        | Weight in ounces of one serving                                                                                                           |
+| cups          | Number of cups in one serving|
+| rating        | Consumer Report rating of cereal|
+
+
+```{r}
+summary(cereals)
+```
+
+There are missing values in record #5, #21, and #58.  We delete the records with missing values.  
+
+```{r missigvals}
+!rowSums(is.na(cereals)) #FALSE means there is a missing value in a record
+
+cereals[5,]
+cereals[21,]
+cereals[58,]
+cereals<-cereals[-c(5,21,58),]
+
+row.names(cereals) <- cereals$name
+cereals <-cereals[,-c(1)]
+```
+
+We start with the numeric variables.    
+
+```{r numericvars}
+cereals_num <- cereals[,-c(1,2,11:12)] #remove name, mfr, type, vitamins, shelf
+```
+
+Take a look at the range of values for the variables again.  
+
+```{r numericrange}
+summary(cereals_num)
+```
+
+We should z-normalize the data set.  
+
+```{r scale}
+cereals_num_z<-scale(cereals_num)
+summary(cereals_num_z)
+```
+
+
+Dissimilarity matrix contains the dissimilarity between the data points. Dissimilarity is also referred to as "distance." The default distance measure for function dist() in R is Euclidean. The function dist() is used to create the dissimilarity matrix.
+
+Size of the matrix is calculated as follows: n*(n-1)/2
+
+How big is our dissimilarity matrix?
+```{r distsize}
+74*(74-1)/2 
+```
+
+Side Note: 2701 elements! If we had used the teens data set, we would have a dissimilarity matrix of 449,985,000 elements! Quite computationally intensive! 
+
+
+Let's calculate the dissimilarity matrix. Then we'll try creating some clusters - let's start with 2. 
+
+```{r dissim_matrix}
+library(cluster)
+
+dis.matrix <- dist(cereals_num_z, method="euclidean")
+dis.matrix_view<-as.matrix(dis.matrix) #convert the above into a matrix object
+dis.matrix_view[1:2,]#print all the calculated Euclidean distances for the first two records
+
+```
+
+### Partitioning around Medoids (PAM)
+
+```{r}
+cereals_pam <- pam(dis.matrix, k=2)
+
+summary(cereals_pam) #Look at the assigned cluster for each data value and it nearest neighboring cluster
+plot(cereals_pam) #Silhouette Plot
+width_2 <- cereals_pam$silinfo[3] #average width
+print(width_2)
+```
+
+For each observation, a silhouette width is calculated. The silhoutte width compares "how close the object is to other objects in its own cluster with how close it is to objects in other clusters" https://www.stat.berkeley.edu/~s133/Cluster2a.html.
+
+
+Silhouette width is another way of measuring cohesion. We want a value closer to 1 for each cluster. Take a look at the silhouette plot. What do you see?  Pretty low values for silhouette width.
+
+Maybe 3 clusters?
+
+```{r clust2}
+cereals_pam <- pam(dis.matrix, k=3)
+
+
+plot(cereals_pam) #Silhouette Plot
+print(cereals_pam$silinfo[3]) #average width
+width_3 <- cereals_pam$silinfo[3] #average width
+print(width_3)
+```
+
+Better but not really close to 1 - how do we know how many to choose?  To estimate the optimal number of clusters, we will use the average silhouette method. The idea is to compute PAM algorithm using different values of clusters k. Next, the average clusters silhouette is drawn according to the number of clusters. The average silhouette measures the quality of a clustering. A high average silhouette width indicates a good clustering. The optimal number of clusters k is the one that maximize the average silhouette over a range of possible values for k.
+
+```{r choose k}
+print(width_2)
+print(width_3)
+```
+This is a small dataset so we can loop through a few different K's to see where we get the best silhoutte width:
+
+```{r k loop}
+
+for(i in 2:10){
+ cereals_pam <- pam(dis.matrix, k=i)
+ widths <- paste("k = ", i, "width = ", cereals_pam$silinfo[3])
+ print(widths)
+}
+```
+
+Do we have to go through this every time?  No.  There is a **pamk** algorithm in the **fpc** package that will choose k for us:
+
+```{r pamk}
+#BTW, both pam and pamk will take raw data as inputs.  We'll take advantage of that here.
+
+best_pam_cereals <- pamk(cereals_num_z)
+
+best_pam_cereals
+```
+
+Just like with k-means, we can add cluster ID back to each observation. 
+
+```{r add clusters}
+new_cereals_num <- data.frame(cereals_num,best_pam_cereals$pamobject[3])
+
+#new_cereals_num #add cluster ID to each observation; not printed
+```
+
+
+## Hierarchical Approach  
+
+The hierarchical approach disaggregates the dataset into a tree structure (similar to decision trees).
+
+### Hierarchical (Agglomerative) Clustering (AGNES)  
+
+Here's a summary of the hierarchical agglomerative clustering algorithm:  
+
+1. Start with each record as its own cluster.  
+2. The two closest records are merged into one cluster.  
+3. At every step, the two clusters with the smallest distance are merged. This translates to mean that either a single record can be added to an existing cluster or two existing clusters are combined.  (Schmueli et al 2018, p. 369).  
+
+Unlike k-means, hiearchical clustering only passes through the data set **once**. 
+
+Whereas k-means uses Euclidean distance, there are numerous measure of distance between clusters with hierarchical clustering:  
+
+1. Single linkage: nearest distance between two records in two clusters. This method groups together records that are farther apart from each other in the early stages.   
+2. Complete linkage: farthest distance between two records in two clusters.  This method groups together records that are closer together in the early stages.  
+3. Average linkage: Each pairwise distance is calculated, and the average of all such distances are calculated. 4. Centroid linkage: Distance between group means is calculated.  
+5. Ward's method: Maximize R-square when grouping records.  
+
+In order to perform hiearchical clustering, we also need to create a **dissimiliarity matrix** (also called **distance matrix**). Luckily, we did it earlier when we discussed k-medoids. 
+
+Now we can apply the hclust() function to do hiearchical clustering.  
+
+```{r hclust.complete}
+set.seed(123)
+cereals_hiearchical_clusters <- hclust(dis.matrix, method="complete") #default method in R is complete linkage. Use method= option to change distance measure. 
+
+plot(cereals_hiearchical_clusters, main = "Dendrogram: Complete Linkage", hang=-1)
+```
+
+```{r hclust.single}
+set.seed(123)
+cereals_hiearchical_clusters <- hclust(dis.matrix, method="single") #default method in R is complete linkage. Use method= option to change distance measure. 
+
+plot(cereals_hiearchical_clusters, main = "Dendrogram: Single Linkage", hang=-1)
+```
+
+```{r hclust.average}
+set.seed(123)
+cereals_hiearchical_clusters <- hclust(dis.matrix, method="average") #default method in R is complete linkage. Use method= option to change distance measure. 
+
+plot(cereals_hiearchical_clusters, main = "Dendrogram: Average Linkage", hang=-1)
+```
+
+```{r hclust.centroid}
+set.seed(123)
+cereals_hiearchical_clusters <- hclust(dis.matrix, method="centroid") #default method in R is complete linkage. Use method= option to change distance measure. 
+
+plot(cereals_hiearchical_clusters, main = "Dendrogram: Centroid Linkage", hang=-1)
+```
+
+```{r hclust.ward}
+set.seed(123)
+cereals_hiearchical_clusters <- hclust(dis.matrix, method="ward.D2") #default method in R is complete linkage. Use method= option to change distance measure. 
+
+plot(cereals_hiearchical_clusters, main = "Dendrogram: Ward's Method", hang=-1)
+```
+
+Take some time to examine all the dendrograms. Which ones agree with each other? How many clusters do you see?  
+
+## Cutting a Dendrogram  
+
+Is it four clusters? Or three clusters? 
+
+```{r cutdendrogram.3}
+set.seed(123)
+cereals_hiearchical_clusters <- hclust(dis.matrix, method="ward.D2") #default method in R is complete linkage. Use method= option to change distance measure. 
+
+plot(cereals_hiearchical_clusters, main = "Dendrogram: Three Clusters", hang=-1)
+rect.hclust(cereals_hiearchical_clusters, k=3, border="red")
+```
+
+
+```{r cutdendrogram.4}
+set.seed(123)
+cereals_hiearchical_clusters <- hclust(dis.matrix, method="ward.D2") #default method in R is complete linkage. Use method= option to change distance measure. 
+
+plot(cereals_hiearchical_clusters, main = "Dendrogram: Four Clusters", hang=-1)
+rect.hclust(cereals_hiearchical_clusters, k=4, border="red")
+
+#cereals_num$cluster <- cutree(cereals_hiearchical_clusters, k=4) #use this line to assign cluster ID to each record
+```
+
+
+## Clustering Categorical Data 
+
+We removed four categorical variables earlier: mfr, type, vitamins, and shelf.  K-means, k-medoids, and hierarchical clustering are not meant for categorical variables. So what are our options if we do want to cluster categorical variables?  
+
+### One Hot Coding  
+
+Henri Ralambondrainy (1995) proposed to recode each categorical variable into multiple dummy variables and then apply k-means algorithm. For example, the variable "type" has two categories: cold and hot. We would recode this variable into two dummy variables: type.cold and type.hot.  
+
+| Variable.Name | Yes | No |
+|---------------|-----|----|
+| type.cold     | 1   | 0  |
+| type.hot      | 1   | 0  | 
+
+  
+
+The cereal 100% Brand would be recoded as follows:  
+
+| type.cold | type.hot |
+|-----------|----------|
+| 1         | 0        |
+
+
+There are several drawbacks with this approach:  
+
+1. Recoding into dummy variables mean you are increasing the size of the data set, and, consequently, the computational costs.  Furthermore, you will run into something called the **curse of dimensionality**, which is next week's class topic.  
+
+2. The cluster centroid (i.e. mean) does not have a practical interpretation.  You will get a mean value between 0 and 1, and this does not make sense in the context of categorical variables.  
+
+3. Euclidean distance does not make sense when you only have values of 0 and 1.  
+
+
+You should know that one hot coding and k-means are used by data miners despite its problems, so don't be shocked when you do see it.  
+
+```{r onehotcoding} 
+cereals_cat <- cereals[,c(1:2,11:12)]
+row.names(cereals_cat) <- cereals$name
+
+library(dummies)
+cereals_cat_dummies <- dummy.data.frame(cereals_cat, sep =".")
+
+
+set.seed(123)
+cereals_cat_dummies_kmeans <- kmeans(cereals_cat_dummies, centers=3)
+
+cereals_cat_dummies_kmeans$centers #look at the centroids 
+
+cereals_cat$cluster_hotcode_kmeans <- cereals_cat_dummies_kmeans$cluster #assign cluster ID to each observation
+
+
+#view the cereals in each cluster
+subset(cereals_cat, cluster_hotcode_kmeans==1)
+subset(cereals_cat, cluster_hotcode_kmeans==2)
+subset(cereals_cat, cluster_hotcode_kmeans==3)
+```
+
+### Use Gower's Similiarity Measure  
+
+Instead of using Euclidean distance, you can use Gower's similarity measure and pair it with k-medoids. Gower's measure requires that all variables must be scaled to a [0,1] range.  
+
+Gower's measure is a "weighted average of the distances computed for each variable" (Shmueli et al. 2018, p. 366).  
+
+Here's the technical calculations of Gower's measure:  
+
+$s_{ij} = \frac{\sum{_{m=1}} w_{ijm}s_{ijm}}{\sum{_{m=1} w_{ijm}}}$  
+
+  
+where $s_{ijm}$ is the similarity between records $i$ and $j$ on measurement $m$  and  
+$w_{ijm}$ is a binary weight given to the corresponding distance.  
+
+For binary measurements, $s_{ijm} = 1$ if $x_{im}=x_{jm}=1$ and 0 otherwise. $w_{ijm}$ = 1 unless $x_{im}=x_{jm}=0$.   
+
+For nonbinary categorical measurements, $s_{ijm} = 1$ if both records are in the same category, and otherwise $s_{ijm} = 0$.  $w_{ijm}$ = 1 unless $x_{im}=x_{jm}=0$.  
+
+To calculate Gower's measure, you have to create a customized dissimilarity matrix and then apply one of the clustering algorithms.  
+
+```{r daisy} 
+#daisy() function is in the cluster package. 
+
+dis.matrix.gower <- daisy(cereals_cat_dummies, metric="gower")
+
+#not necessary to do the following two lines but we want to view the gower measures.
+gower.matrix <- as.matrix(dis.matrix.gower) #convert to matrix for viewing 
+gower.matrix[1, ] #view gower measures for first cereal
+```
+
+```{r gower.pam}
+set.seed(123)
+cereals_cat_dummies_gower_pam <- pam(dis.matrix.gower, k=3)
+
+cereals_cat$cluster_gower_pam <- cereals_cat_dummies_gower_pam$clustering #assign cluster ID to each observation
+
+#view the cereals in each cluster
+subset(cereals_cat, cluster_gower_pam==1)
+subset(cereals_cat, cluster_gower_pam==2)
+subset(cereals_cat, cluster_gower_pam==3)
+```
+
+The drawback of using Gower's distance and k-medoids is the computational costs. This approach is not scalable for large data sets.  
+
+
+### Use k-modes algorithm  
+
+Zhexue Huang (1997a; 1997b; and 1998) introduced k-modes algorithm as an alternative to k-means for categorical data. k-modes is scalable for large data sets.  
+
+k-modes differs from k-means in that the former uses modes instead of means when grouping observations.  Here is the algorithm according to Huang (1998):
+
+1. Select k initial modes; one for each cluster.  
+2. Assign an object to the cluster whose mode is nearest to it. Update the mode of the cluster after each assignment.  
+3. After all objects have been assigned, retest the dissimiliarity of objects against the current modes. If an object is found such that its nearest mode belongs to another cluster rather than its current one, reassign object to that cluster and update the modes of both clusters.  
+4. Repeat Step #3 until no object has changed clusters after a full cycle test of the entire data set (Huang 1998, p. 290).  
+
+Notice that you still must test out multiple k's to find the best one when working with k-modes algorithm. 
+
+The most well-known implementation of k-modes is in the **klaR** package.  
+
+```{r kmodes}
+#only use mfr, type, vitamins, and shelf to perform kmodes algorithm. We do not want to include the cluster assignment columns from hot coding and gower. 
+
+#no need to recode into dummies
+cereals_cat_kmodes<- kmodes(cereals_cat[,1:4], modes=3, iter.max=10) #default iter.max = 10
+
+cereals_cat_kmodes #print summary of kmodes output #notice the "representative cereal" in each cluster
+
+cereals_cat$cluster_kmodes <- cereals_cat_kmodes$cluster
+
+subset(cereals_cat, cluster_kmodes==1)
+subset(cereals_cat, cluster_kmodes==2)
+subset(cereals_cat, cluster_kmodes==3)
+```
+
+### Clustering Mixed Data (Continuous & Categorical Variables)  
+
+Let's step back and look at the original **cereals** data set, which has both continuous (numeric) and categorical variables. How would we cluster such a data set?  
+
+
+## Use Gower's Measure with K-Medoids  
+
+We have to convert all the categorical variables into [0,1] range. We also have to min-max normalize all the continuous variables into [0,1] range. Yes, it is tedious work!  
+
+Let's start with the categorical variables.  
+
+```{r cereals.cat}
+cereals.cat <- cereals[,c(1,2,11,12)]
+cereals.cat.dummies <- dummy.data.frame(cereals.cat) #these are the categorical variables recoded to [0,1] range.
+```  
+
+Now we have to take care of the continuous variables. 
+
+```{r cereals.num}
+cereals.num <- cereals[,-c(1,2,11,12,16,17)]
+
+min.max.normalize <- function(x){return((x-min(x))/(max(x)-min(x)))} 
+cereals.num.min.max <-as.data.frame(lapply(cereals.num, min.max.normalize))
+```
+
+Now we bring everything together.  
+
+```{r cereals.combined}
+cereals.mixed <- cbind(cereals.cat.dummies, cereals.num.min.max)
+```
+
+And then calculate Gower's measure.  
+
+$s_{ij} = \frac{\sum{_{m=1}} w_{ijm}s_{ijm}}{\sum{_{m=1} w_{ijm}}}$  
+
+  
+where $s_{ijm}$ is the similarity between records $i$ and $j$ on measurement $m$  and  
+$w_{ijm}$ is a binary weight given to the corresponding distance.  
+
+For continuous variables, $s_{ijm} = 1 - \frac{|x_{im} - x_{jm}|}{max(x_m)-min(x_m)}$ and $w_{ijm}=1$ if the value of measurement is known for both records. 
+
+```{r cereals.mixed.gower}
+dis.matrix.gower.mixed <- daisy(cereals.mixed, metric="gower")
+```
+
+And now we run k-medoids.  
+
+```{r cereals.mixed.gower.kmedoids}
+set.seed(123)
+cereals.mixed.gower.pam <- pam(dis.matrix.gower.mixed, k=3)
+
+cereals$cluster_gower_pam <- cereals.mixed.gower.pam$clustering #assign cluster ID to each observation
+
+cereals.mixed.profiles <- aggregate(cereals[,-c(1:2,11:12)], by=list(cereals$cluster_gower_pam), FUN=mean) #cannot calculate means for categorical variables so remove those columns. 
+
+#view the cereals in each cluster
+subset(cereals, cluster_gower_pam==1, select=c(mfr, type, vitamins, shelf))
+subset(cereals, cluster_gower_pam==2, select=c(mfr, type, vitamins, shelf))
+subset(cereals, cluster_gower_pam==3, select=c(mfr, type, vitamins, shelf))
+
+cereals$cluster_gower_pam <- NULL #remove the added cluster ID column to return cereals dataset back to original state
+```
+
+As you can imagine, this approach is computationally (and time) intensive. Plus, k-medoids is not suitable to scale up for large data sets. 
+
+### k-prototype Algorithm  
+
+Huang (1997a; 1997b; 1998) proposed an extension of the k-modes algorithm that is suitable for clustering continuous and categorical variables. k-prototype is not computationally costly and can be scaled up to large data sets.  
+
+Assume that we have two mixed-type records, $X$, and $Y$. Each record has multiple attributes (or variables). Some attributes are numeric, and other attributes are categorical.  
+
+The dissimilarity between two mixed-type objects is described as the sum of two components:  
+
+$dissimilarity(X,Y) = E + \lambda M$  
+
+Where E is the squared Euclidean distance measure on the numeric attributes (i.e. k-means) and  
+M is the matching dissimilarity measure on the categorical attributes (i.e. k-modes)  
+$\lambda$ is a weight value that can be customized to not favor numeric or categorical attributes.  
+
+Huang suggested that the average standard deviation of numeric attributes can be used as the default $\lambda$. He also said that if the user wants to favor numeric attributes, then changing $\lambda$ to a smaller value is desirable. On the other hand, a larger $\lambda$ may be used to favor categorical attributes.  
+
+The R implementation of k-prototype is in the **clusMixType** package. The implementation is *very new*. Here's the link to the reference manual: https://cran.r-project.org/web/packages/clustMixType/clustMixType.pdf. The manual is not user friendly.  
+
+Things you should keep in mind when working with the kproto() function:  
+
+1. All categorical variables must be coded as factors. kproto() does not recognize strings/characters.  
+2. No missing values.  
+
+```{r kprototype} 
+str(cereals) #make sure the categorical variables are factors
+
+cereals.kprototype <- kproto(cereals, k=3) 
+
+summary(cereals.kprototype)
+
+cereals$cluster_kprototype <- cereals.kprototype$cluster #use this line to assign cluster ID back to each record.
+
+cereals.mixed.profiles.kprototype <- aggregate(cereals[,-c(1:2,11:12)], by=list(cereals$cluster_kprototype), FUN=mean) #cannot calculate means for categorical variables so remove those columns. 
+
+#view the cereals in each cluster
+subset(cereals, cluster_kprototype==1)
+subset(cereals, cluster_kprototype==2)
+subset(cereals, cluster_kprototype==3)
+```
+
+
+```{r kprototype.elbow}
+data <- cereals
+# Elbow Method for finding the optimal number of clusters
+set.seed(123)
+# Compute and plot wss for k = 2 to k = 15.
+k.max <- 15
+data <- na.omit(data) # to remove the rows with NA's
+wss <- sapply(1:k.max, 
+              function(k){kproto(data, k)$tot.withinss})
+wss
+plot(1:k.max, wss,
+     type="b", pch = 19, frame = FALSE, 
+     xlab="Number of clusters K",
+     ylab="Total within-clusters sum of squares")
+
+```
+
+
+###References  
+
+Huang, Zhexue (1997). Clustering Large Data Sets with Mixed Numeric and Categorical Variables. Available at: http://citeseerx.ist.psu.edu/viewdoc/summary?doi=10.1.1.94.9984. Accessed 16 April 2018. 
+
+Huang, Zhexue (1997b). A Fast Clustering Algorithm to Cluster Very Large Categorical Data Sets in Data Mining. Available at: http://citeseerx.ist.psu.edu/viewdoc/download?doi=10.1.1.134.83&rep=rep1&type=pdf. Accessed 16 April 2018.  
+
+Huang, Zhexue (1998). Extensions to the k-means Algorithm for Clustering Large Data Sets with Categorical Values. Available at: http://arbor.ee.ntu.edu.tw/~chyun/dmpaper/huanet98.pdf. Accessed 16 April 2018. 
+
+Lantz, Brett (2013). Machine Learning with R. Birmingham, UK: Packt Publishing. Chapter 9. 
+
+Shmueli, Galit and et al (2018). Data Mining for Business Analytics: Concepts, Techniques, and Applications in R. Hoboken: Wiley. Chapter 15.  

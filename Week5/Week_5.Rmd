@@ -1,0 +1,535 @@
+---
+title: 'Week 5: Ensembles, Uplift Models & Dimension Reduction'
+author: "Tom Cook"
+date: "Nov 20, 2018"
+output:
+  pdf_document: default
+  html_document:
+    df_print: paged
+  word_document: default
+---
+
+# Getting Started  
+
+The packages you will need for this week are **caret**, **rpart**, **rpart.plot**, **adabag**, **uplift**, **pls**, **ggplot2**, and **ggrepel**.
+```{r setup,echo=F}
+knitr::opts_chunk$set(echo = TRUE);
+
+
+# convenience function to quickly install packages that are needed if not installed and then load those packages
+packages_to_be_loaded=c("caret","rpart","rpart.plot",'adabag','uplift','pls','ggplot2','ggrepel',"randomForest")
+
+lapply(packages_to_be_loaded,function(x){
+	if(x%in%installed.packages()[,1]==F){ install.packages(x)}
+	require(x,character.only = T)
+	return()
+})
+
+```
+## Decision Tree Model Redux  
+
+We will use a smaller data set to discuss ensemble models since they are computationally intensive. 
+
+```{r import.ub}
+bank.df <- UniversalBank <- read.csv("UniversalBank.csv")
+bank.df <- bank.df[ , -c(1, 5)]  # Drop ID and zip code columns.
+bank.df$Personal.Loan <- factor(as.character(bank.df$Personal.Loan),levels=c(0,1), labels=c("no","yes"))
+```
+
+```{r bc.split}
+# using library caret
+set.seed(123)
+trainIndex <- createDataPartition(bank.df$Personal.Loan, p = .8,list = FALSE,times = 1)
+head(trainIndex)
+train.set <- bank.df[trainIndex,]
+validate.set <- bank.df[-trainIndex,]
+```
+
+
+
+### Steps 7, 8 & 9: Choose & implement the data mining techniques to be used. Interpret the results. 
+```{r DT}
+# using rpart and rpart.plot
+# You will want to run this entire chunk at the same time to get the images to work. If you try to run these commands one-at-a-time, they may not work correctly. 
+
+DT.model <- rpart(train.set$Personal.Loan~., method="class", parms = list(split="gini"), data=train.set)
+
+plot(DT.model, uniform=TRUE, main="Decision Tree for Personal Loan Offers")
+text(DT.model, use.n=TRUE, all=TRUE, cex=0.8)
+
+rpart.plot(DT.model, type=0, extra=101) # These commands add some styling
+rpart.plot(DT.model, type=1, extra=101)
+
+actual <- validate.set$Personal.Loan
+predicted <- predict(DT.model,validate.set, type="class")
+results.matrix <- confusionMatrix(predicted, actual, positive="yes")
+print(results.matrix)
+```
+
+
+
+## Improving Model Performance: Ensemble Models Approach
+
+One decision tree suffers from high variance. The resulting tree depends on the training data. What we want is a procedure with low variance--meaning we should see similar error estimates if the tree is applied repeatedly to distinct datasets. We will examine three ensemble models that are built on the basic decision trees:
+
+1. Bagging (bootstrap aggregation)  
+2. Random forests (many trees = a forest)  
+3. Boosting
+
+### Bagging
+
+Bagging is a 4 step process:  
+
+1. Generate B bootstrapped samples from the training set:  
+    -Draw an observation from the training set.  
+    -Record observation in the bootstrapped sample.  
+    -Return observation to the training set. Draw another observation to incude in the bootstrapped sample.  
+    -Repeat this process until bootstrapped sample size equals the size of the training set.  
+    -Repeat the above steps over and over again until a desired number of B bootstrapped samples are created. 
+
+2. Construct decision trees for all B bootstrapped samples.  
+
+3. For each given test observation, we record the class predicted by each of the B trees.  
+
+4. The overall prediction is the most commonly occuring class among the B predictions. Majority voting wins.
+
+Bagging averages many trees so it reduces the variance of the instability of generating just one tree. Bagging leads to improved prediction. The tradeoff is you lose interpretability and the ability to see simple structure in a tree.
+
+
+```{r bagging}
+# using the randomforest package
+set.seed(123) 
+
+bagging.model <- randomForest(Personal.Loan ~.,data=train.set, mtry=11, method="class", ntree=500,na.action = na.omit, importance=TRUE) 
+```
+
+### Out of Bag (OOB) Error
+
+A note on the out-of-bag (OOB) error is warranted. OOB is a measure of the error rate popular in tree algorithms that use bootstrapping. Gareth et al. (2013) explained OOB as follows:
+
+
+Recall that the key to bagging is that trees are repeatedly fit to bootstrapped subsets of the observations. One that can show that **on average, each bagged tree makes use of around two-thirds of the observations. The remaining one-third of the observations not used to fit a given bagged tree are referred to as out-of-bag (OOB) observations.** We can predict the response for the ith observation using each of the trees in which that observation was OOB. This will yield around B/3 predictions for the ith observation. In order to obtain a single prediction for the ith observation, we take majority vote. This lead to a single OOB prediction for the ith observation. An OOB prediction can be obtained in this way for each of the n observations, from which the overall OOB classification error can be computed. The resulting OOB error is a valid estimate of the test error for the bagged model, since the response for each observation is predicted using only the trees that were not fit using that observation....**It can be shown that with B sufficiently large, OOB error is virtually equivalent to leave-one-out cross-validation error**"(p. 317-318).
+
+
+```{r bc.oob}
+print(bagging.model) #note the "out of bag" (OOB) error rate. 
+```
+
+### What are the important predictors in our bagging model? 
+
+Look at the mean decrease in accuracy of predictions in the OOB samples when a given variable is excluded.
+
+```{r predictors}
+importance(bagging.model, type=1)
+# this tells us how much worse off we'd be by excluding each of these variables. In the case of Age, we'd be 22.7 % less accurate from excluding Age from our model.
+```
+
+Look at the mean decrease in node impurity resulting from splits over that variable.  
+
+```{r predictors.2}
+importance(bagging.model, type=2)
+# This does something similar to the previous chunk, but indicates the decrease in impurity, which is the metric we tend to use for actually creating our decision trees. 
+varImpPlot(bagging.model)
+# Note the rank order changes slightly depending on whether we are looking at decrease in impurity or decrease in accuracy.
+```
+
+```{r bagging.cm}
+actual <- validate.set$Personal.Loan
+predicted <- predict(bagging.model, newdata=validate.set, type="class") 
+
+# make sure that the levels in actual are the same as the levels produced by
+# predicted. 
+print("The following two commands should produce the same thing ('no', 'yes')")
+levels(predicted)
+levels(actual)
+
+CM <- confusionMatrix(predicted, actual, positive="yes") 
+print(CM)
+```
+
+
+## Random Forest
+
+Random forests consider only a subset of the predictors at each split. This means the node splits are not dominated by one or a few strong predictors, and, thus, give other (i.e. less strong) predictors more chances to be used. When we average the resulting trees, we get more reliable results since the individual trees are not dominated by a few strong predictors.
+
+```{r bc.rf}
+RF.model <- randomForest(Personal.Loan ~.,data=train.set, mtry=3, ntree=500,na.action = na.omit, importance=TRUE) #default to try three predictors at a time and create 500 trees. 
+print(RF.model) 
+importance(RF.model) 
+varImpPlot(RF.model) 
+
+actual <- validate.set$Personal.Loan 
+predicted <- predict(RF.model, validate.set, type="class") 
+CM <- confusionMatrix(predicted, actual, positive="yes") 
+print(CM)
+```
+
+
+## Boosting
+
+The boosting model involves:
+
+-We fit a decision tree to the entire training set.     
+
+-We "boost" the observations that were misclassified by increasing their probabilities of being selected into a revised training set.    
+
+-We fit another decision tree model using the boosted sample.  
+
+The steps above are repeated multiple times.  Note that the trees are that built later depend greatly on the trees already built. Learning slowly has shown to improve model accuracy while holding down variability.
+
+```{r bc.boost}
+library(adabag) #a popular boosting algorithm
+set.seed(123)
+boosting.model <- boosting.cv(Personal.Loan ~.,data=train.set, boos=TRUE, v=10) #.cv is adding cross validation
+#don't worry about warning message. Also, this takes a while to run.
+boosting.model$confusion #confusion matrix for boosting
+boosting.model$error #error rate for boosting (OOB)
+1-boosting.model$error #accuracy rate for boosting (OOB)
+```
+
+
+## Uplift Model 
+
+Uplift is defind as "the increase in propensity of favorable opinion after receiving message" (Shmueli et al 2018, p. 321). Uplift model is popular for marketers and political campaigns alike. Here is how an uplift model works (Shmueli et al 2018, p. 321):  
+
+1. Randomly divide a sample into a treatment and control group. The treatment group receives a message, and the control group receives nothing. Collect desired behavior/action from individual in each group. Record the results in a new column (i.e. target variable). This is the traditional A-B testing.  
+2. Recombine the data sample. Partition the sample into a training and validation set. Build predictive models as usual. Each model's target variable is the desired result/behavior information. Each model should include a predictor indicating whether the treatment was applied to the individual or not.  
+3. "Score" the predictive model on the validation set. For each individual in the validation set, record the prediction made by each model.  
+4. Reverse the value of the treatment variable and re-score the same model on the validation set. This will yield for each validation record its propensity of success had it received the opposite treatment.  
+5. Uplift is estimated as follows: P(Success|Treatment=1) - P(Success|Treatment=0)  
+
+The chosen uplift model is then applied to new data:  
+1. Include a synthetic predictor variable for a desired treatment for each new observation. Score the model on the new data.  
+3. Reverse the predictor variable value for each observation. Score the model again. 
+4. Estimate uplift. 
+5. Apply treatment for observations meeting some cutoff uplift value. 
+
+The treatment with the higher uplift wins! (p)
+
+
+```{r uplift}
+voter.df <- read.csv("Voter-Persuasion_0.csv", header=TRUE)
+str(voter.df)
+# transform variable MOVED_AD to numerical
+voter.df$MOVED_AD_NUM <- ifelse(voter.df$MOVED_AD == "Y", 1, 0)
+
+set.seed(123)
+trainIndex <- createDataPartition(voter.df$MOVED_AD_NUM, p = .8,list = FALSE,times = 1)
+head(trainIndex)
+train.df <- voter.df[trainIndex,]
+valid.df <- voter.df[-trainIndex,]
+
+# use upliftRF to apply a Random Forest (alternatively use upliftKNN() to apply kNN). 
+
+library(uplift)
+up.fit <- upliftRF(MOVED_AD_NUM ~ AGE + NH_WHITE + COMM_PT + H_F1 + REG_DAYS+ 
+                     PR_PELIG + E_PELIG + POLITICALC  + trt(MESSAGE_A),
+                   data = train.df, mtry = 3, ntree = 100, split_method="ED",verbose = TRUE)
+pred <- predict(up.fit, newdata = valid.df)
+# first colunm: p(y | treatment) 
+# second colunm: p(y | control) 
+uplift.preds <- data.frame(pred, "uplift" = pred[,1] - pred[,2])
+```
+
+## Principal Components Analysis 
+
+### Food for Thought  
+
+Take a look at this chessboard. The board is two dimensional. The length (and width) has eight "spots," so the board has a total of $8*8 = 64$ spots. A chess piece can only be located at one spot among the 64 options. Furthermore, the nearest neighboring chess piece is somewhere in the other 63 location options.  
+
+Now imagine that we expand the chessboard to a third dimension, the flat plane would become a cube. The location options would increase to $8*8*8=512$. Since a given chess piece can only be located in one spot, the nearest neighboring chess piece is somewhere in the other 511 location options.  
+
+If we can increase the cube into the fourth dimension, we would get a [tesseract](https://en.wikipedia.org/wiki/Tesseract) and that would increase the location options to $8*8*8*8=4096$! The nearest neighboring chess piece is now in the other 4,095 location options. In another word, the nearest neighbor is now no longer meaningful. It can be just about any random chess piece.  
+
+Note: Refer to [Domingos 2010](https://homes.cs.washington.edu/~pedrod/papers/cacm12.pdf) for a more complete discussion.     
+
+![chessboard](https://upload.wikimedia.org/wikipedia/commons/4/4a/AAA_SVG_Chessboard_and_chess_pieces_04.svg)
+
+### So How Does Any of This Apply to Data Mining?  
+
+The dimension of a model is equivalent to the number of predictors. When we add more predictors, we are increasing the dimension of the model. Patterns and structures that we want to find via any model become a harder and harder task because the data space becomes increasingly sparse. We have less and less number of observed cases in our training set to "train" any model. In another word, there is now too much noise for us to parse through to find useful information.  This problem is called the **curse of dimensionality**.  
+
+### Related Problems  
+
+We have seen in the past few weeks that we create many new variables (think dummy variables and new forms of existing variables) in the data preprocessing stage. Problems exist when we create new variables:  
+
+*New variables are correlated with existing variables. If we use all the variables in a linear regression model, we run into a problem called multicollinearity. Multicollinearity exists when we cannot separate out the effect of one predictor from another predictor.  
+
+*Including correlated predictors or predictors that are not related to the target variable can also lead to overfitting.  
+
+*Superflous variables can also increase computational costs.  
+
+### What Do We Do?  
+
+What if we could obtain a reduced representation of the data set that is much smaller in volume but yet produces the same (or almost the same) analytical results? We could:  
+
+* Avoid the curse of dimensionality  
+* Help eliminate irrelevant features and reduce noise  
+* Reduce time and space required in data mining  
+* Allow easier visualization  
+
+There are many ways to reduce the dimension of a data set:  
+
+1. Combine categories to reduce the number of required dummy variables.  
+2. Find a median or mean value to represent a category, and, thus, "covert" the categorical variable into a numeric variable.  
+3. Use principal components analysis. 
+
+The first method is called **principal components analysis** or **PCA**. PCA is intended to be done on a data set prior to applying a model. PCA is part of the data preprocessing stage, so it does not consider the target variable at all.   
+# Principal Components Analysis (PCA)
+
+The PCA approach to dimension reduction posists that there exists some weighted linear combinations of the original variables that explain the majority of information of the original data set. We want to find those weighted linear combinations!  
+
+## Let's Start with an Example  
+
+```{r import}
+Cereals <- read.csvCereals <- read.csv("cereal.csv")
+Cereals<- na.omit(Cereals) #remove NA's
+
+row.names(Cereals) <- Cereals$name
+cereals.complete <-Cereals[,-1]
+```
+
+```{r import.reduced}
+names(cereals.complete)
+      
+cereals <- cereals.complete[,-c(1:2,11:12)] #remove categorical variables: mfr, type, vitamins, shelf
+```
+
+Let's begin with a simple example. Imagine that we have a smaller data set of only two variables: **calories** and **rating**. The rating variable shows Consumer Reports ratings for each cereal's "heathiness". (Ignore all the other variables for now.)  
+
+First, let's look at the mean for each variable.
+
+```{r mean}
+mean(cereals$calories)
+mean(cereals$rating)
+```
+Let's look at the variance of each variable.  
+
+```{r varcovmatrix}
+var(cereals$calories)
+var(cereals$rating)
+```
+
+We see that the total variance of both variables is 379 + 197 = 576. **calories** accounts for $\frac{394}{590}=66\%$ of the total variability, and **rating** accounts for the other $34\%$ of the total variability. If we have to reduce the dimension of our two variables data set down to one variable, we would lose at least $34\%$ of the total variability.  
+
+Is there a better way to do dimension reduction that would allow us to lose less than 34% of the total variability?  
+
+### A Visual Representation  
+
+The scatter plot below shows calories versus rating on a two dimensional plane. Now if we have to reduce the dimension of the data set down to one dimension (from a plane down to a line), then the red line would capture the most variability in the data set. We make the assumption that the red line would preserve the most amount of variance in the original data set, and, hence, would retain the most information in the original two variables data set. At the same time, the red line is also the closest (of all the possible lines) to the actual observations (i.e. minimizing the sum of squared Euclidean distances). These are two unique characteristics of this red line. In the parlance of PCA, we call this red line the **first principal component**. Thus, the first principal component is a linear projection that captures the most variability (and, thus, information) in the original data set.  
+
+
+```{r scatterplot.pc1}
+plot(cereals$calories, cereals$rating, xlim=c(0,200), ylim=c(0,120))
+segments(75,100,125,5, col="red")
+```
+
+There also exists another line that contains the second largest amount of variance, and, yet, uncorrelated to the red line. As you can see below, the blue line is perpendicular to the red line. In technical terminology, we call the blue line "orthogonal" to the red line. The blue line represents the second principal component.  
+
+```{r scatterplot.pc2}
+plot(cereals$calories, cereals$rating, xlim=c(0,200), ylim=c(0,120), xlab="calories", ylab="rating", 
+     main="Scatter Plot of Calories vs. Rating With Two Principal Component Directions")
+segments(75,100,125,5, col="red")
+segments(75,20,130,50, col="blue")
+```
+
+Instead of trying to "guess" where the first and second principal components are on a scatter plot, R can find the exact linear projections for us.  
+
+```{r prcomp2}
+
+pcs <- prcomp(data.frame(cereals$calories,cereals$rating))
+
+summary(pcs)
+```
+
+The above output tells us that there are two principal components. The first principal component is a linear projection that accounts for $86.32\%$ of the total variance in the data set. The second principal component is an orthogonal linear projection that accounts for the other $13.68\%$ of the total variance.  
+
+The barplot below shows the same information.  
+
+```{r prcomp2.varexp}
+pcs.variance.explained <-(pcs$sdev^2 / sum(pcs$sdev^2))*100
+barplot(pcs.variance.explained, las=2, xlab="Principal Component", ylab="% Variance Explained", main="Principal Components versus Percent of Variance Explained")
+```
+
+```{r prcomp2.loadings}
+pcs$rotation
+```
+
+The rotation matrix gives us the weights, which are usually called **loadings**, used to project the original data points onto the first and second principal component directions. The loadings for the first principal component are $(0.853,-0.522)$, and the loadings for the second principal component are $(0.522, 0.853)$.  So how do we use the loading values?  
+
+Here is an example for the first cereal, 100% Bran, with 70 calories and a rating of 68.4:  
+
+$score_{pca.1}=0.853*(70-107.027)+(-0.523)*(68.4-42.372)=-45.197$
+$score_{pca.2}=0.522*(70-107.027)+(0.853)*(68.4-42.372)=2.874$
+
+The first calculation shows the **score** for the 100% Bran cereal projected onto the first principal component line.  The second calculation shows the **score** for the 100% Bran cereal projected onto the second principal component line. We should also note that the calories (and rating) value is subtracted from its mean prior to multiplying on the loading value.     
+
+We can also ask R to give us these scores. Notice the scores are more accurate than our calculations above.   
+
+```{r prcomp.2.scores}
+
+scores<-pcs$x
+head(scores,5)
+```
+
+#### Reaching a Conclusion  
+
+As we have learned, the first principal component explains 86% of the variability in the data set. If we are to reduce our two dimensional data set down to one dimensional, we would use the first principal component. 
+
+### Extending to the 11th-Dimensional Cereals Data Set
+
+We can apply PCA to the entire cereals data set, provided that the following rules are followed:  
+
+*PCA only works on numeric variables.  
+*PCA does not work with missing values.  
+*Normalize the data set before performing PCA.  
+
+
+Here is an example of PCA where we have not normalized the data set. 
+
+
+```{r prcomp.all}
+pcs<-prcomp(cereals)
+summary(pcs)
+```
+
+```{r prcomp.all.varexp}
+pcs.variance.explained <-(pcs$sdev^2 / sum(pcs$sdev^2))*100
+barplot(pcs.variance.explained, las=2, xlab="Principal Component", ylab="% Variance Explained", main="Principal Components versus Percent of Variance Explained")
+```
+
+```{r prcomp.all.loadings}
+pcs$rotation
+```
+
+Notice that PC1 is dominated by sodium, which has a loading of 0.987. Furthermore, PC2 is dominated by potassium, which has a loading of -0.987. [Please note that the sign does not matter in PCA. We care about the magnitude.] Since both sodium and potassium are measured in milligrams while other variables are measured in grams or some other scale, the sodium and potassium variables have larger variances than the other variables. Hence, sodium and potassium are dominating in PCA.  
+
+Now let's see what PCA looks like when we normalize the data set first.  
+
+```{r prcomp.norm.all}
+pcs<-prcomp(cereals, scale. = T) #use scale option to z-normalize data set. 
+summary(pcs)
+```
+
+```{r prcomp.norm.all.varexp}
+pcs.variance.explained <-(pcs$sdev^2 / sum(pcs$sdev^2))*100
+pcs.variance.explained[1]+pcs.variance.explained[2]
+barplot(pcs.variance.explained, las=2, xlab="Principal Component", ylab="% Variance Explained", main="Principal Components versus Percent of Variance Explained")
+```
+
+
+We note that the first two principal components only explain $58\%$ of the variability after we normalized the data set. When we applied PCA without normalizing the variables, we found that the first two principal components explained $96\%$ of the variability. 
+
+#### Picking the Number of Principal Components
+
+There is no right way to pick the number of principal components to represent the original data set. We want to choose the number of PCs that contains a large amount of variability in the original data set. "Large amount" is also difficult to pin down. Some people use arbitrary cut off values like 85% or 90%, but there's no theoretical basis for any of these decisions.  
+
+A "rule of thumb" approach does exist to help find the number of PCs. It is the familiar elbow method.  
+
+```{r screeplot}
+screeplot(pcs, type="line")
+```
+
+In the above screeplot, we would choose the number of PCs around the elbow, which is at 4 PCs.  
+
+#### Making Sense of the Principal Component Loadings
+
+How can we use the principal components to understand the structure of the cereals data set? Let's see! 
+
+```{r prcomp.norm.all.loadings}
+pcs$rotation
+```
+
+PC1: Large positive loadings for calories, sodium, carbohydrates, and cups. Large negative loadings for fiber, potassium, and rating. PC1 is balancing among all of these variables. These cereals have high sodium content, carbohydrate amount, and large amount per serving (measured in cups). They are also low in fiber, potassium, and, hence, Consumer Reports ratings. 
+
+PC2: Large positive loadings for most features except carbohydrates, cups and rating.
+
+PC3: Large positive loadings for sodium, carbohydrates, and weight. Only negative loading is sugar. These cereals have high sodium, carbs, and weight but low sugar.   
+
+PC4: Large positive loadings for weight, cups, and carbohydrates. Large negative loading for sodium. These cereals have large weight, cups per serving, and carbs but low in sodium.  
+
+
+If we plot the first two principal components against each other, can we find anything interesting? 
+
+```{r scores}
+scores<-as.data.frame(pcs$x)
+
+library(ggplot2)
+library(ggrepel)
+ggplot(scores) +
+  geom_point(aes(PC1, PC2), color = 'red') +
+  geom_text_repel(aes(PC1, PC2, label = rownames(scores))) +
+  theme_classic(base_size = 16)
+
+
+ggplot(scores) +
+  geom_point(aes(PC2, PC3), color = 'red') +
+  geom_text_repel(aes(PC1, PC2, label = rownames(scores))) +
+  theme_classic(base_size = 16)
+
+#does not look nice in R markdown. Run the code chunk in the console & see result in "Plots" window
+```
+
+We can see that as we move from left to right, the cereals become less and less healthy and more "sugary". Also, if we move from bottom to top, the cereals become heavier. 
+
+
+
+### Another Practical Application of PCA: Principal Components Regression  
+
+Principal components can also be used as predictors in a linear regression model. The idea is that a small number of principal components that explain most of the variability in the data set also can be used to predict the target variable. A principal component regression (PCR) model would be less likely to suffer from multicollinearity. PCR is most appropriate when a few PCs capture most of the variation in the predictors. Otherwise, we should use least squares regression. Let's look at an example! 
+
+We want to predict cereal's rating using the known numeric predictors. Using PCR, we would need to first split the data set into a training set and a test set. We then standardize the data set and then apply PCA analysis. For each combination of principal components, we create a separate regression model of the form:  
+
+$Y = z_{1} + z_{2} + ... + z_{m}$ where $m < p$  
+
+$Y$ is the target  
+
+$z_{1}, z_{2},...$ are the principal component projections  
+
+$m$ are the principal components and $p$ are the number of predictors in the original data set 
+
+We can use cross validation to further compute the prediction error for each combination of $z_{m}$.
+
+```{r pcr.cereals}
+#notice that the train-test split is different from what we have seen
+set.seed(123)
+train<-sample(1:nrow(cereals),59) #80% train
+test<-(-train) #20% test
+
+library(pls)
+set.seed(123)
+pcr.fit <- pcr(rating~.,data=cereals,subset=train,scale=TRUE,validation="CV")
+
+summary(pcr.fit)
+```
+
+
+In the above output, we can see that we have to contend with two choices when deciding the right number of principal components to use as predictors: 1) the cross validation prediction error [which is measured as the root mean squared prediction error or RMSEP by default] and 2) the percentage of total variance explained by the principal components. Although the smallest cross validation RMSEP occurs when the PCR model uses 10 principal components and the percentage of total variance explained is $99.5\%$, this would give us a regression model that is not much simpler than if we had just gone with the least squares approach. 
+
+Let's try again! Look at the 3rd principal component where 90% of the total variance is explained and the RMSEP is 5.055. Here's a visualization:  
+
+```{r valplot}
+validationplot(pcr.fit, val.type="RMSEP") # other options include MSEP & R2
+```
+
+We could use the first 5 principal components as predictors for our PCR model.  
+
+```{r pcr.cereals.test}
+pcr.pred <- predict(pcr.fit, cereals[test,], ncomp=3)
+pcr.pred.df <- as.data.frame(pcr.pred)
+pcr.pred.df$actual.rating <- cereals[test,11]
+
+MSEP<-mean((pcr.pred.df$`rating.3 comps`-pcr.pred.df$actual.rating)^2)
+RMSEP <- sqrt(MSEP)
+print(MSEP)
+print(RMSEP)
+
+```
+
+Our PCR model did not do too poorly. The root mean squared prediction error for rating in the test set is 3.27.
+
+##References  
+
+Gareth, James and et al. (2013). An Introduction to Statistical Learning with Applications in R. New York: Springer.  
+
+Shmueli, Galit and et al (2018). Data Mining for Business Analytics: Concepts, Techniques, and Applications in R. Hoboken: Wiley. Chapter 6.  
